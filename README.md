@@ -2,6 +2,8 @@
 
 A sleek, premium dark-mode web application designed to automate the calculations and routine management for the **Efficient Trader Strategy (ATR Momentum Version)** on the Nepal Stock Exchange (NEPSE).
 
+**Live App**: [scuba3198.github.io/nepse-momentum-trader](https://scuba3198.github.io/nepse-momentum-trader/)
+
 ---
 
 ## The Strategy
