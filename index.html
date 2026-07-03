@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AURA // NEPSE ATR Momentum Tracker</title>
+  <!-- Google Fonts: Syne (Display) & Plus Jakarta Sans (Body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div class="glow-container">
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+  </div>
+
+  <header class="app-header">
+    <div class="header-logo">
+      <span class="logo-symbol"><i class="fa-solid fa-chart-line-up"></i></span>
+      <div class="logo-text">
+        <h1>AURA</h1>
+        <p>NEPSE ATR MOMENTUM TRACKER</p>
+      </div>
+    </div>
+    <div class="header-stats">
+      <div class="stat-card mini">
+        <span class="stat-label">ACCOUNT VALUE</span>
+        <div class="stat-value-group">
+          <span class="currency">NPR</span>
+          <span id="header-account-value">1,000,000.00</span>
+          <button id="edit-account-btn" title="Edit Account Value"><i class="fa-solid fa-pen-to-square"></i></button>
+        </div>
+      </div>
+      <div class="stat-card mini">
+        <span class="stat-label">STRATEGY STATE</span>
+        <div class="stat-value-group" style="justify-content: space-between; width: 100%;">
+          <span id="strategy-state" class="state-badge cash">CASH (100% FREE)</span>
+          <button id="reset-app-btn" title="Reset All Data" style="background: none; border: none; color: var(--text-dimmed); cursor: pointer; padding: 0.2rem; transition: color var(--transition-fast); margin-left: 0.5rem;"><i class="fa-solid fa-trash-can-arrow-up"></i></button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="dashboard-grid">
+    <!-- COLUMN 1: SCANNER & CALCULATOR -->
+    <section class="grid-column">
+      <!-- STEP 1: SUPER PERFORMANCE SCANNER -->
+      <div class="dashboard-card glass-panel" id="scanner-section">
+        <div class="card-header">
+          <span class="step-num">01</span>
+          <h2>Super Performance Scanner</h2>
+          <span class="tooltip" data-tooltip="Run Super Performance filter on NepseAlpha. Input the qualifying stocks below to find the best candidate."><i class="fa-solid fa-circle-info"></i></span>
+        </div>
+        <div class="card-body">
+          <div class="scanner-input-row">
+            <div class="input-group">
+              <label for="scan-ticker">Ticker</label>
+              <input type="text" id="scan-ticker" placeholder="e.g. UPPER" style="text-transform: uppercase;">
+            </div>
+            <div class="input-group">
+              <label for="scan-pct-off">% Off 52W High</label>
+              <div class="input-wrapper">
+                <input type="number" id="scan-pct-off" placeholder="0.00" step="0.01" min="0" max="100">
+                <span class="input-suffix">%</span>
+              </div>
+            </div>
+            <button id="add-scan-candidate" class="btn btn-secondary"><i class="fa-solid fa-plus"></i> Add</button>
+          </div>
+
+          <div class="table-container">
+            <table class="data-table" id="scanner-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>% Off 52W High</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="scanner-list">
+                <tr class="empty-row">
+                  <td colspan="4">No candidates added. Verify Stage 2, SMA & RS criteria first.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="scanner-actions">
+            <button id="clear-scanner-btn" class="btn btn-text"><i class="fa-solid fa-trash-can"></i> Clear All</button>
+            <button id="use-best-candidate" class="btn btn-primary" disabled><i class="fa-solid fa-bullseye"></i> Calculate Best Candidate</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEPS 2 & 3: CALCULATOR -->
+      <div class="dashboard-card glass-panel" id="calculator-section">
+        <div class="card-header">
+          <span class="step-num">02-03</span>
+          <h2>Position Size Calculator</h2>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="input-group">
+              <label for="calc-ticker">Target Ticker</label>
+              <input type="text" id="calc-ticker" placeholder="e.g. UPPER" style="text-transform: uppercase;">
+            </div>
+            <div class="input-group">
+              <label for="calc-entry">Planned Entry Price</label>
+              <div class="input-wrapper">
+                <span class="input-prefix">Rs.</span>
+                <input type="number" id="calc-entry" placeholder="0.00" step="0.1">
+              </div>
+            </div>
+            <div class="input-group">
+              <label for="calc-atr">Current ATR (14)</label>
+              <div class="input-wrapper">
+                <span class="input-prefix">Rs.</span>
+                <input type="number" id="calc-atr" placeholder="0.00" step="0.01">
+              </div>
+            </div>
+            <div class="input-group">
+              <label for="calc-risk-pct">Max Risk %</label>
+              <div class="input-wrapper">
+                <input type="number" id="calc-risk-pct" value="1.0" readonly class="readonly-input">
+                <span class="input-suffix">%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="calculator-results">
+            <div class="result-tile">
+              <span class="result-label">Max Planned Risk (1%)</span>
+              <span class="result-value" id="res-planned-risk">Rs. 0.00</span>
+            </div>
+            <div class="result-tile">
+              <span class="result-label">Planned Initial Stop (-2.5 ATR)</span>
+              <span class="result-value" id="res-initial-stop">Rs. 0.00</span>
+            </div>
+            <div class="result-tile">
+              <span class="result-label">Risk Per Share</span>
+              <span class="result-value" id="res-risk-per-share">Rs. 0.00</span>
+            </div>
+            <div class="result-tile highlighted">
+              <span class="result-label">Suggested Position Size</span>
+              <span class="result-value" id="res-position-size">0 Shares</span>
+            </div>
+          </div>
+
+          <div class="calculator-action">
+            <button id="execute-trade-btn" class="btn btn-success" disabled><i class="fa-solid fa-cart-shopping"></i> Execute / Log Trade</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- COLUMN 2: ACTIVE TRADES & DAILY ROUTINE -->
+    <section class="grid-column">
+      <!-- STEPS 4-7: ACTIVE PORTFOLIO -->
+      <div class="dashboard-card glass-panel" id="active-portfolio-section">
+        <div class="card-header">
+          <span class="step-num">04-05</span>
+          <h2>Active Trades</h2>
+          <span class="trade-count-badge" id="active-trades-count">0 Open</span>
+        </div>
+        <div class="card-body">
+          <div class="portfolio-list" id="portfolio-list">
+            <!-- Dynamic Trade Cards Go Here -->
+            <div class="empty-state">
+              <i class="fa-solid fa-wallet"></i>
+              <p>No active trades. Scan and compute position sizes to start trading.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DAILY ROUTINE & TRAILING STOP UPDATES -->
+      <div class="dashboard-card glass-panel" id="daily-routine-section">
+        <div class="card-header">
+          <span class="step-num">06-07</span>
+          <h2>Daily Routine Update</h2>
+        </div>
+        <div class="card-body">
+          <form id="routine-form" class="disabled-form">
+            <div class="input-group">
+              <label for="routine-select">Select Active Trade</label>
+              <select id="routine-select" disabled>
+                <option value="">-- No Active Trades --</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <div class="input-group">
+                <label for="routine-close">Today's Closing Price</label>
+                <div class="input-wrapper">
+                  <span class="input-prefix">Rs.</span>
+                  <input type="number" id="routine-close" placeholder="0.00" step="0.1" disabled>
+                </div>
+              </div>
+              <div class="input-group">
+                <label for="routine-atr">Today's ATR (14)</label>
+                <div class="input-wrapper">
+                  <span class="input-prefix">Rs.</span>
+                  <input type="number" id="routine-atr" placeholder="0.00" step="0.01" disabled>
+                </div>
+              </div>
+            </div>
+            <button type="submit" id="routine-submit-btn" class="btn btn-primary" disabled><i class="fa-solid fa-arrows-rotate"></i> Update Stop & Check Exit</button>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- BOTTOM SECTION: COMPLETED TRADES & LOGS -->
+  <footer class="dashboard-footer">
+    <div class="dashboard-card glass-panel" id="history-section">
+      <div class="card-header">
+        <span class="step-num"><i class="fa-solid fa-history"></i></span>
+        <h2>Trading History</h2>
+      </div>
+      <div class="card-body">
+        <div class="table-container">
+          <table class="data-table" id="history-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Entry Date & Price</th>
+                <th>Exit Date & Price</th>
+                <th>Shares</th>
+                <th>Total Risk Logged</th>
+                <th>P&L (NPR)</th>
+                <th>Return %</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="history-list">
+              <tr class="empty-row">
+                <td colspan="8">No historical trades logged yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- POPUPS / MODALS -->
+  <!-- 1. Edit Account Value Modal -->
+  <div class="modal-overlay" id="account-modal">
+    <div class="modal-content glass-panel">
+      <h3>Adjust Account Value</h3>
+      <p class="modal-desc">This is used to calculate the 1% maximum planned risk per trade.</p>
+      <div class="input-group">
+        <label for="modal-account-value">Account Value (NPR)</label>
+        <div class="input-wrapper">
+          <span class="input-prefix">Rs.</span>
+          <input type="number" id="modal-account-value" placeholder="1000000.00" step="100">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="close-account-modal" class="btn btn-text">Cancel</button>
+        <button id="save-account-btn" class="btn btn-primary">Save Value</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Execute Purchase Price Modal -->
+  <div class="modal-overlay" id="execute-modal">
+    <div class="modal-content glass-panel">
+      <h3>Complete Purchase Order</h3>
+      <p class="modal-desc">Record the actual execution details for <strong><span id="exec-ticker-lbl">TICKER</span></strong>.</p>
+      
+      <div class="execution-comparison-grid">
+        <div class="comp-box">
+          <span class="label">Planned Price</span>
+          <span class="value" id="exec-planned-price-lbl">Rs. 0.00</span>
+        </div>
+        <div class="comp-box">
+          <span class="label">Planned Shares</span>
+          <span class="value" id="exec-planned-shares-lbl">0</span>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="input-group">
+          <label for="exec-actual-price">Actual Executed Price (Average)</label>
+          <div class="input-wrapper">
+            <span class="input-prefix">Rs.</span>
+            <input type="number" id="exec-actual-price" placeholder="0.00" step="0.1">
+          </div>
+          <span class="price-warning" id="exec-price-warning" style="display:none; color:#ef4444; font-size:0.8rem; margin-top:0.25rem;"><i class="fa-solid fa-triangle-exclamation"></i> Price is > 2% higher than planned. Skipped!</span>
+        </div>
+        <div class="input-group">
+          <label for="exec-actual-shares">Actual Quantity Filled</label>
+          <input type="number" id="exec-actual-shares" placeholder="0" step="1">
+        </div>
+      </div>
+      
+      <div class="modal-actions">
+        <button id="close-execute-modal" class="btn btn-text">Cancel</button>
+        <button id="confirm-execute-btn" class="btn btn-success">Confirm Purchase</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
