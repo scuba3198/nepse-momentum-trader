@@ -75,6 +75,16 @@ function formatNPR(value) {
   }).format(value);
 }
 
+// HTML escape helper to prevent XSS
+function escapeHTML(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Save/Load State from LocalStorage
 function saveState() {
   localStorage.setItem('nepse_atr_momentum_state', JSON.stringify(state));
@@ -437,7 +447,7 @@ function renderScanner() {
     const isBest = candidate.pctOff === bestValue;
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><strong>${candidate.ticker}</strong></td>
+      <td><strong>${escapeHTML(candidate.ticker)}</strong></td>
       <td>${candidate.pctOff.toFixed(2)}%</td>
       <td>
         <span class="rank-badge ${isBest ? 'best' : 'candidate'}">
@@ -502,7 +512,7 @@ function renderActiveTrades() {
     card.innerHTML = `
       <div class="trade-card-header">
         <div class="trade-card-title">
-          <h3>${trade.ticker}</h3>
+          <h3>${escapeHTML(trade.ticker)}</h3>
           <span class="shares-badge">${trade.shares} Shares</span>
           <span class="risk-badge-mini" style="font-size: 0.65rem; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(255, 255, 255, 0.08); color: #f87171; padding: 0.15rem 0.4rem; border-radius: 4px; font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem;" title="Actual Risk % of your account value"><i class="fa-solid fa-shield-halved"></i> Risk: ${actualRiskPct.toFixed(2)}%</span>
         </div>
@@ -596,7 +606,7 @@ function renderHistory() {
     const isGain = h.pnl >= 0;
     const riskPctStr = h.actualRiskPct ? `(${h.actualRiskPct.toFixed(2)}% of account)` : '';
     tr.innerHTML = `
-      <td><strong>${h.ticker}</strong></td>
+      <td><strong>${escapeHTML(h.ticker)}</strong></td>
       <td>${h.entryDate}<br><small class="text-muted">Rs. ${formatNPR(h.entryPrice)}</small></td>
       <td>${h.exitDate}<br><small class="text-muted">Rs. ${formatNPR(h.exitPrice)}</small></td>
       <td>${h.shares}</td>
