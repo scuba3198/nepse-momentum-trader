@@ -26,6 +26,9 @@ const elements = {
   editAccountBtn: document.getElementById('edit-account-btn'),
   resetAppBtn: document.getElementById('reset-app-btn'),
   strategyState: document.getElementById('strategy-state'),
+  exportBtn: document.getElementById('export-btn'),
+  importBtn: document.getElementById('import-btn'),
+  importFileInput: document.getElementById('import-file-input'),
 
   // Macro Filter (Step 0)
   macroYesBtn: document.getElementById('macro-yes-btn'),
@@ -108,6 +111,69 @@ function escapeHTML(str) {
 // State Persistence
 // --------------------------------------------------------------------------
 
+function exportState() {
+  const exportData = {
+    exportedAt: new Date().toISOString(),
+    appVersion: '2.0.0',
+    state
+  };
+  const json = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const today = new Date().toISOString().slice(0, 10);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `nepse-efficient-trader-${today}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function importState(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+
+      // Support both wrapped exports ({ state: {...} }) and raw state objects
+      const importedState = parsed.state || parsed;
+
+      if (typeof importedState !== 'object' || importedState === null) {
+        throw new Error('Invalid structure');
+      }
+
+      // Validate required keys exist
+      const requiredKeys = ['accountValue', 'activeTrades', 'history'];
+      for (const key of requiredKeys) {
+        if (!(key in importedState)) {
+          throw new Error(`Missing required field: ${key}`);
+        }
+      }
+
+      // Merge into state with type guards
+      state.accountValue = parseFloat(importedState.accountValue) || 1000000.00;
+      state.stage2IsLeading = importedState.stage2IsLeading === true;
+      state.candidates = Array.isArray(importedState.candidates) ? importedState.candidates : [];
+      state.activeTrades = Array.isArray(importedState.activeTrades) ? importedState.activeTrades : [];
+      state.history = Array.isArray(importedState.history) ? importedState.history : [];
+
+      saveState();
+      alert(`Import successful! Loaded ${state.activeTrades.length} active trade(s) and ${state.history.length} history record(s).`);
+    } catch (err) {
+      alert(`Import failed: ${err.message}\n\nMake sure you are importing a valid NEPSE Efficient Trader export file.`);
+      console.error('Import error:', err);
+    } finally {
+      // Reset the input so the same file can be re-imported if needed
+      event.target.value = '';
+    }
+  };
+  reader.readAsText(file);
+}
+
 function saveState() {
   localStorage.setItem('nepse_efficient_trader_state', JSON.stringify(state));
   renderAll();
@@ -146,6 +212,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // --------------------------------------------------------------------------
 
 function setupEventListeners() {
+
+  // --- Export / Import ---
+  elements.exportBtn.addEventListener('click', exportState);
+  elements.importBtn.addEventListener('click', () => elements.importFileInput.click());
+  elements.importFileInput.addEventListener('change', importState);
 
   // --- Macro Filter (Step 0) ---
   elements.macroYesBtn.addEventListener('click', () => {

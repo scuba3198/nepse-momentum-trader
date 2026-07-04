@@ -1078,3 +1078,36 @@ select:focus {
   margin-bottom: 1rem;
 }
 
+/* Header action button group */
+.header-action-btns {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.5rem;
+}
+
+.header-icon-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dimmed);
+  cursor: pointer;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.header-icon-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-color);
+}
+
+.header-icon-btn.danger-icon:hover {
+  color: var(--color-danger);
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+

@@ -45,9 +45,15 @@
         <span class="stat-label">STRATEGY STATE</span>
         <div class="stat-value-group" style="justify-content: space-between; width: 100%;">
           <span id="strategy-state" class="state-badge cash">CASH (100% FREE)</span>
-          <button id="reset-app-btn" title="Reset All Data" style="background: none; border: none; color: var(--text-dimmed); cursor: pointer; padding: 0.2rem; transition: color var(--transition-fast); margin-left: 0.5rem;"><i class="fa-solid fa-trash-can-arrow-up"></i></button>
+          <div class="header-action-btns">
+            <button id="export-btn" title="Export Data as JSON" class="header-icon-btn"><i class="fa-solid fa-file-arrow-down"></i></button>
+            <button id="import-btn" title="Import Data from JSON" class="header-icon-btn"><i class="fa-solid fa-file-arrow-up"></i></button>
+            <button id="reset-app-btn" title="Reset All Data" class="header-icon-btn danger-icon"><i class="fa-solid fa-trash-can-arrow-up"></i></button>
+          </div>
         </div>
       </div>
+      <!-- Hidden file input for import -->
+      <input type="file" id="import-file-input" accept=".json" style="display:none;">
     </div>
   </header>
 
