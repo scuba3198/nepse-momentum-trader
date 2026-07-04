@@ -349,6 +349,11 @@ function setupEventListeners() {
     elements.execActualPrice.value = entry.toFixed(2);
     elements.execActualShares.value = size;
     elements.execPriceWarning.style.display = 'none';
+    // Reset button to default state
+    elements.confirmExecuteBtn.textContent = 'Confirm Purchase';
+    elements.confirmExecuteBtn.dataset.override = 'false';
+    elements.confirmExecuteBtn.classList.remove('btn-override');
+    elements.confirmExecuteBtn.classList.add('btn-success');
     elements.confirmExecuteBtn.disabled = false;
 
     elements.executeModal.classList.add('active');
@@ -362,9 +367,18 @@ function setupEventListeners() {
       const pctIncrease = ((actual - planned) / planned) * 100;
       if (pctIncrease > MAX_SLIPPAGE_PCT) {
         elements.execPriceWarning.style.display = 'block';
-        elements.confirmExecuteBtn.disabled = true;
+        // Switch to override mode — don't hard-block (trade may already be executed in TMS)
+        elements.confirmExecuteBtn.textContent = 'Override & Log';
+        elements.confirmExecuteBtn.dataset.override = 'true';
+        elements.confirmExecuteBtn.classList.add('btn-override');
+        elements.confirmExecuteBtn.classList.remove('btn-success');
+        elements.confirmExecuteBtn.disabled = false;
       } else {
         elements.execPriceWarning.style.display = 'none';
+        elements.confirmExecuteBtn.innerHTML = 'Confirm Purchase';
+        elements.confirmExecuteBtn.dataset.override = 'false';
+        elements.confirmExecuteBtn.classList.remove('btn-override');
+        elements.confirmExecuteBtn.classList.add('btn-success');
         elements.confirmExecuteBtn.disabled = false;
       }
     }
@@ -372,6 +386,12 @@ function setupEventListeners() {
 
   elements.closeExecuteModal.addEventListener('click', () => {
     elements.executeModal.classList.remove('active');
+    // Reset button state on cancel
+    elements.confirmExecuteBtn.textContent = 'Confirm Purchase';
+    elements.confirmExecuteBtn.dataset.override = 'false';
+    elements.confirmExecuteBtn.classList.remove('btn-override');
+    elements.confirmExecuteBtn.classList.add('btn-success');
+    elements.execPriceWarning.style.display = 'none';
   });
 
   elements.confirmExecuteBtn.addEventListener('click', () => {
@@ -387,9 +407,16 @@ function setupEventListeners() {
     }
 
     const pctIncrease = ((actualPrice - plannedEntry) / plannedEntry) * 100;
-    if (pctIncrease > MAX_SLIPPAGE_PCT) {
-      alert(`Execution price is more than ${MAX_SLIPPAGE_PCT}% higher than planned entry. Per strategy rules, you must skip this trade.`);
-      return;
+    const isOverride = elements.confirmExecuteBtn.dataset.override === 'true';
+
+    if (pctIncrease > MAX_SLIPPAGE_PCT && isOverride) {
+      // Already executed in TMS — ask for a quick acknowledgment
+      const ok = confirm(
+        `⚠️ Execution price is ${pctIncrease.toFixed(1)}% above planned entry — exceeds the ${MAX_SLIPPAGE_PCT}% strategy limit.\n\n` +
+        `If this trade is already executed in your TMS, click OK to log it anyway.\n` +
+        `Otherwise click Cancel and review your entries.`
+      );
+      if (!ok) return;
     }
 
     // Step 5: Calculate actual initial stop from actual purchase price

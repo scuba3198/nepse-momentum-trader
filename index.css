@@ -1110,4 +1110,18 @@ select:focus {
   border-color: rgba(239, 68, 68, 0.25);
 }
 
+/* Override & Log button state (amber, for >2% slippage already executed) */
+.btn-override {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.1));
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+}
+
+.btn-override:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.3), rgba(245, 158, 11, 0.15));
+  border-color: rgba(245, 158, 11, 0.7);
+  color: #fde68a;
+}
+
+
 
