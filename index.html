@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AURA // NEPSE ATR Momentum Tracker</title>
+  <title>AURA // NEPSE Efficient Trader</title>
   <!-- Google Fonts: Syne (Display) & Plus Jakarta Sans (Body) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,7 +23,7 @@
       <span class="logo-symbol"><i class="fa-solid fa-chart-line-up"></i></span>
       <div class="logo-text">
         <h1>AURA</h1>
-        <p>NEPSE ATR MOMENTUM TRACKER</p>
+        <p>NEPSE EFFICIENT TRADER</p>
       </div>
     </div>
     <div class="header-stats">
@@ -36,6 +36,12 @@
         </div>
       </div>
       <div class="stat-card mini">
+        <span class="stat-label">PORTFOLIO SLOTS</span>
+        <div class="stat-value-group">
+          <span id="header-slots-count" class="slots-badge">0 / 3</span>
+        </div>
+      </div>
+      <div class="stat-card mini">
         <span class="stat-label">STRATEGY STATE</span>
         <div class="stat-value-group" style="justify-content: space-between; width: 100%;">
           <span id="strategy-state" class="state-badge cash">CASH (100% FREE)</span>
@@ -45,9 +51,41 @@
     </div>
   </header>
 
+  <!-- HALT BANNER (shown when Stage 2 is not dominant) -->
+  <div id="halt-banner" class="halt-banner" style="display:none;">
+    <i class="fa-solid fa-circle-xmark"></i>
+    <strong>TRADING HALTED</strong> — Stage 2 is not the dominant market regime. Remain 100% in cash. Do not open new positions until Stage 2 leads.
+  </div>
+
   <main class="dashboard-grid">
-    <!-- COLUMN 1: SCANNER & CALCULATOR -->
+    <!-- COLUMN 1: MACRO FILTER + SCANNER + CALCULATOR -->
     <section class="grid-column">
+
+      <!-- STEP 0: BROAD MARKET MACRO FILTER -->
+      <div class="dashboard-card glass-panel" id="macro-filter-section">
+        <div class="card-header">
+          <span class="step-num">00</span>
+          <h2>Broad Market Macro Filter</h2>
+          <span class="tooltip" data-tooltip="Check NepseAlpha Stage Analysis. Stage 2 (Uptrend) must have the highest stock count among all 4 stages before trading."><i class="fa-solid fa-circle-info"></i></span>
+        </div>
+        <div class="card-body">
+          <p class="macro-desc">Check the NepseAlpha Stage Analysis chart. Is <strong>Stage 2 (Uptrend)</strong> the regime with the <em>highest stock count</em>?</p>
+          <div class="macro-toggle-group">
+            <button id="macro-yes-btn" class="macro-btn macro-btn-yes">
+              <i class="fa-solid fa-circle-check"></i>
+              Yes — Stage 2 is Leading
+            </button>
+            <button id="macro-no-btn" class="macro-btn macro-btn-no active-no">
+              <i class="fa-solid fa-circle-xmark"></i>
+              No — Do Not Trade
+            </button>
+          </div>
+          <div id="macro-status-text" class="macro-status-text halted">
+            <i class="fa-solid fa-ban"></i> Market regime does not favour trading. Stay in cash.
+          </div>
+        </div>
+      </div>
+
       <!-- STEP 1: SUPER PERFORMANCE SCANNER -->
       <div class="dashboard-card glass-panel" id="scanner-section">
         <div class="card-header">
@@ -83,7 +121,7 @@
               </thead>
               <tbody id="scanner-list">
                 <tr class="empty-row">
-                  <td colspan="4">No candidates added. Verify Stage 2, SMA & RS criteria first.</td>
+                  <td colspan="4">No candidates added. Verify Stage 2, SMA &amp; RS criteria first.</td>
                 </tr>
               </tbody>
             </table>
@@ -122,17 +160,22 @@
               </div>
             </div>
             <div class="input-group">
-              <label for="calc-risk-pct">Max Risk %</label>
+              <label for="calc-risk-pct">Risk per Slot</label>
               <div class="input-wrapper">
-                <input type="number" id="calc-risk-pct" value="1.0" readonly class="readonly-input">
+                <input type="number" id="calc-risk-pct" value="0.33" readonly class="readonly-input">
                 <span class="input-suffix">%</span>
               </div>
             </div>
           </div>
 
+          <!-- Slots full warning -->
+          <div id="slots-full-warning" class="slots-full-warning" style="display:none;">
+            <i class="fa-solid fa-lock"></i> All 3 portfolio slots are filled. Close an existing position to open a new one.
+          </div>
+
           <div class="calculator-results">
             <div class="result-tile">
-              <span class="result-label">Max Planned Risk (1%)</span>
+              <span class="result-label">Max Risk per Slot (~0.33%)</span>
               <span class="result-value" id="res-planned-risk">Rs. 0.00</span>
             </div>
             <div class="result-tile">
@@ -158,7 +201,7 @@
 
     <!-- COLUMN 2: ACTIVE TRADES & DAILY ROUTINE -->
     <section class="grid-column">
-      <!-- STEPS 4-7: ACTIVE PORTFOLIO -->
+      <!-- STEPS 4-5: ACTIVE PORTFOLIO -->
       <div class="dashboard-card glass-panel" id="active-portfolio-section">
         <div class="card-header">
           <span class="step-num">04-05</span>
@@ -206,7 +249,7 @@
                 </div>
               </div>
             </div>
-            <button type="submit" id="routine-submit-btn" class="btn btn-primary" disabled><i class="fa-solid fa-arrows-rotate"></i> Update Stop & Check Exit</button>
+            <button type="submit" id="routine-submit-btn" class="btn btn-primary" disabled><i class="fa-solid fa-arrows-rotate"></i> Update Stop &amp; Check Exit</button>
           </form>
         </div>
       </div>
@@ -226,11 +269,11 @@
             <thead>
               <tr>
                 <th>Ticker</th>
-                <th>Entry Date & Price</th>
-                <th>Exit Date & Price</th>
+                <th>Entry Date &amp; Price</th>
+                <th>Exit Date &amp; Price</th>
                 <th>Shares</th>
-                <th>Total Risk Logged</th>
-                <th>P&L (NPR)</th>
+                <th>Risk Taken</th>
+                <th>P&amp;L (NPR)</th>
                 <th>Return %</th>
                 <th>Status</th>
               </tr>
@@ -251,7 +294,7 @@
   <div class="modal-overlay" id="account-modal">
     <div class="modal-content glass-panel">
       <h3>Adjust Account Value</h3>
-      <p class="modal-desc">This is used to calculate the 1% maximum planned risk per trade.</p>
+      <p class="modal-desc">Used to calculate the maximum risk per slot: <strong>1% ÷ 3 slots ≈ 0.33%</strong> of account value per position.</p>
       <div class="input-group">
         <label for="modal-account-value">Account Value (NPR)</label>
         <div class="input-wrapper">
@@ -290,7 +333,7 @@
             <span class="input-prefix">Rs.</span>
             <input type="number" id="exec-actual-price" placeholder="0.00" step="0.1">
           </div>
-          <span class="price-warning" id="exec-price-warning" style="display:none; color:#ef4444; font-size:0.8rem; margin-top:0.25rem;"><i class="fa-solid fa-triangle-exclamation"></i> Price is > 2% higher than planned. Skipped!</span>
+          <span class="price-warning" id="exec-price-warning" style="display:none; color:#ef4444; font-size:0.8rem; margin-top:0.25rem;"><i class="fa-solid fa-triangle-exclamation"></i> Price is &gt; 2% higher than planned. Skip this trade per strategy rules.</span>
         </div>
         <div class="input-group">
           <label for="exec-actual-shares">Actual Quantity Filled</label>
