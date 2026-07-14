@@ -38,7 +38,7 @@
       <div class="stat-card mini">
         <span class="stat-label">PORTFOLIO SLOTS</span>
         <div class="stat-value-group">
-          <span id="header-slots-count" class="slots-badge">0 / 3</span>
+          <span id="header-slots-count" class="slots-badge">0 / 5</span>
         </div>
       </div>
       <div class="stat-card mini">
@@ -92,53 +92,6 @@
         </div>
       </div>
 
-      <!-- STEP 1: SUPER PERFORMANCE SCANNER -->
-      <div class="dashboard-card glass-panel" id="scanner-section">
-        <div class="card-header">
-          <span class="step-num">01</span>
-          <h2>Super Performance Scanner</h2>
-          <span class="tooltip" data-tooltip="Run Super Performance filter on NepseAlpha. Input the qualifying stocks below to find the best candidate."><i class="fa-solid fa-circle-info"></i></span>
-        </div>
-        <div class="card-body">
-          <div class="scanner-input-row">
-            <div class="input-group">
-              <label for="scan-ticker">Ticker</label>
-              <input type="text" id="scan-ticker" placeholder="e.g. UPPER" style="text-transform: uppercase;">
-            </div>
-            <div class="input-group">
-              <label for="scan-pct-off">% Off 52W High</label>
-              <div class="input-wrapper">
-                <input type="number" id="scan-pct-off" placeholder="0.00" step="0.01" min="0" max="100">
-                <span class="input-suffix">%</span>
-              </div>
-            </div>
-            <button id="add-scan-candidate" class="btn btn-secondary"><i class="fa-solid fa-plus"></i> Add</button>
-          </div>
-
-          <div class="table-container">
-            <table class="data-table" id="scanner-table">
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  <th>% Off 52W High</th>
-                  <th>Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody id="scanner-list">
-                <tr class="empty-row">
-                  <td colspan="4">No candidates added. Verify Stage 2, SMA &amp; RS criteria first.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="scanner-actions">
-            <button id="clear-scanner-btn" class="btn btn-text"><i class="fa-solid fa-trash-can"></i> Clear All</button>
-            <button id="use-best-candidate" class="btn btn-primary" disabled><i class="fa-solid fa-bullseye"></i> Calculate Best Candidate</button>
-          </div>
-        </div>
-      </div>
-
       <!-- STEPS 2 & 3: CALCULATOR -->
       <div class="dashboard-card glass-panel" id="calculator-section">
         <div class="card-header">
@@ -155,7 +108,7 @@
               <label for="calc-entry">Planned Entry Price</label>
               <div class="input-wrapper">
                 <span class="input-prefix">Rs.</span>
-                <input type="number" id="calc-entry" placeholder="0.00" step="0.1">
+                <input type="number" id="calc-entry" placeholder="0.00" step="0.01">
               </div>
             </div>
             <div class="input-group">
@@ -166,22 +119,27 @@
               </div>
             </div>
             <div class="input-group">
-              <label for="calc-risk-pct">Risk per Slot</label>
+              <label for="calc-risk-pct">Risk per Position</label>
               <div class="input-wrapper">
-                <input type="number" id="calc-risk-pct" value="0.33" readonly class="readonly-input">
+                <input type="number" id="calc-risk-pct" value="1.00" readonly class="readonly-input">
                 <span class="input-suffix">%</span>
               </div>
             </div>
           </div>
 
+          <div class="input-group liquidity-input-group">
+            <label for="calc-liquidity">Recent Daily Turnover — optional, paste directly from NepseAlpha's rotation table</label>
+            <textarea id="calc-liquidity" rows="2" placeholder="Paste cells directly, e.g. 197 21.90 Lac.	154 43.96 Lac.	104 77.45 Lac.	68 1.31 Cr."></textarea>
+          </div>
+
           <!-- Slots full warning -->
           <div id="slots-full-warning" class="slots-full-warning" style="display:none;">
-            <i class="fa-solid fa-lock"></i> All 3 portfolio slots are filled. Close an existing position to open a new one.
+            <i class="fa-solid fa-lock"></i> All 5 portfolio slots are filled. Close an existing position to open a new one.
           </div>
 
           <div class="calculator-results">
             <div class="result-tile">
-              <span class="result-label">Max Risk per Slot (~0.33%)</span>
+              <span class="result-label">Max Risk per Position (1%)</span>
               <span class="result-value" id="res-planned-risk">Rs. 0.00</span>
             </div>
             <div class="result-tile">
@@ -196,21 +154,51 @@
               <span class="result-label">Suggested Position Size</span>
               <span class="result-value" id="res-position-size">0 Shares</span>
             </div>
+            <div class="result-tile">
+              <span class="result-label">Capital Required / Cash Available</span>
+              <span class="result-value" id="res-capital-check">Rs. 0.00 / Rs. 0.00</span>
+            </div>
+            <div class="result-tile" id="capital-pct-tile" style="display:none;">
+              <span class="result-label">Position Capital as % of Account</span>
+              <span class="result-value" id="res-capital-pct">—</span>
+            </div>
+            <div class="result-tile" id="liquidity-check-tile" style="display:none;">
+              <span class="result-label">Liquidity Check (Position / Avg Daily Turnover)</span>
+              <span class="result-value" id="res-liquidity-check">—</span>
+            </div>
           </div>
 
           <div class="calculator-action">
-            <button id="execute-trade-btn" class="btn btn-success" disabled><i class="fa-solid fa-cart-shopping"></i> Execute / Log Trade</button>
+            <button id="execute-trade-btn" class="btn btn-success" disabled><i class="fa-solid fa-file-signature"></i> Place Day Order</button>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- COLUMN 2: ACTIVE TRADES & DAILY ROUTINE -->
+    <!-- COLUMN 2: PENDING ORDERS, ACTIVE TRADES & DAILY ROUTINE -->
     <section class="grid-column">
-      <!-- STEPS 4-5: ACTIVE PORTFOLIO -->
+      <!-- STEP 4: PENDING GTC LIMIT ORDERS -->
+      <div class="dashboard-card glass-panel" id="pending-orders-section">
+        <div class="card-header">
+          <span class="step-num">04</span>
+          <h2>Pending Orders (Daily Re-Priced)</h2>
+          <span class="trade-count-badge" id="pending-orders-count">0 / 5 Reserved</span>
+          <span class="tooltip" data-tooltip="Day orders — cancel at session end each day. Log the close & ATR daily to re-price and resubmit at the new close (target size recomputed from fresh ATR), up to 5 attempts, or until the close breaks the current stop, or the Macro Filter fails."><i class="fa-solid fa-circle-info"></i></span>
+        </div>
+        <div class="card-body">
+          <div class="portfolio-list" id="pending-orders-list">
+            <div class="empty-state">
+              <i class="fa-solid fa-clock"></i>
+              <p>No outstanding GTC orders. Use the calculator to place one.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEPS 5-6-7: ACTIVE PORTFOLIO -->
       <div class="dashboard-card glass-panel" id="active-portfolio-section">
         <div class="card-header">
-          <span class="step-num">04-05</span>
+          <span class="step-num">05-07</span>
           <h2>Active Trades</h2>
           <span class="trade-count-badge" id="active-trades-count">0 Open</span>
         </div>
@@ -244,7 +232,7 @@
                 <label for="routine-close">Today's Closing Price</label>
                 <div class="input-wrapper">
                   <span class="input-prefix">Rs.</span>
-                  <input type="number" id="routine-close" placeholder="0.00" step="0.1" disabled>
+                  <input type="number" id="routine-close" placeholder="0.00" step="0.01" disabled>
                 </div>
               </div>
               <div class="input-group">
@@ -300,7 +288,7 @@
   <div class="modal-overlay" id="account-modal">
     <div class="modal-content glass-panel">
       <h3>Adjust Account Value</h3>
-      <p class="modal-desc">Used to calculate the maximum risk per slot: <strong>1% ÷ 3 slots ≈ 0.33%</strong> of account value per position.</p>
+      <p class="modal-desc">Used to calculate the maximum risk per position: <strong>1% of account value per position</strong> (up to <strong>5%</strong> total with all 5 slots filled).</p>
       <div class="input-group">
         <label for="modal-account-value">Account Value (NPR)</label>
         <div class="input-wrapper">
@@ -315,41 +303,19 @@
     </div>
   </div>
 
-  <!-- 2. Execute Purchase Price Modal -->
-  <div class="modal-overlay" id="execute-modal">
+  <!-- Generic App Dialog (replaces native alert/confirm/prompt) -->
+  <div class="modal-overlay" id="app-dialog">
     <div class="modal-content glass-panel">
-      <h3>Complete Purchase Order</h3>
-      <p class="modal-desc">Record the actual execution details for <strong><span id="exec-ticker-lbl">TICKER</span></strong>.</p>
-      
-      <div class="execution-comparison-grid">
-        <div class="comp-box">
-          <span class="label">Planned Price</span>
-          <span class="value" id="exec-planned-price-lbl">Rs. 0.00</span>
-        </div>
-        <div class="comp-box">
-          <span class="label">Planned Shares</span>
-          <span class="value" id="exec-planned-shares-lbl">0</span>
+      <h3 id="app-dialog-title">Notice</h3>
+      <p class="modal-desc" id="app-dialog-message" style="white-space: pre-line;"></p>
+      <div class="form-grid" id="app-dialog-input-row" style="display:none;">
+        <div class="input-group">
+          <input type="text" id="app-dialog-input">
         </div>
       </div>
-
-      <div class="form-grid">
-        <div class="input-group">
-          <label for="exec-actual-price">Actual Executed Price (Average)</label>
-          <div class="input-wrapper">
-            <span class="input-prefix">Rs.</span>
-            <input type="number" id="exec-actual-price" placeholder="0.00" step="0.1">
-          </div>
-          <span class="price-warning" id="exec-price-warning" style="display:none; color:#f59e0b; font-size:0.8rem; margin-top:0.25rem;"><i class="fa-solid fa-triangle-exclamation"></i> Price is &gt; 2% above planned — strategy rules say skip. If already executed in TMS, use <strong>Override &amp; Log</strong>.</span>
-        </div>
-        <div class="input-group">
-          <label for="exec-actual-shares">Actual Quantity Filled</label>
-          <input type="number" id="exec-actual-shares" placeholder="0" step="1">
-        </div>
-      </div>
-      
       <div class="modal-actions">
-        <button id="close-execute-modal" class="btn btn-text">Cancel</button>
-        <button id="confirm-execute-btn" class="btn btn-success">Confirm Purchase</button>
+        <button id="app-dialog-cancel-btn" class="btn btn-text">Cancel</button>
+        <button id="app-dialog-ok-btn" class="btn btn-success">OK</button>
       </div>
     </div>
   </div>

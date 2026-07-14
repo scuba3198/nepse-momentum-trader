@@ -331,7 +331,8 @@ body {
 
 input[type="text"],
 input[type="number"],
-select {
+select,
+textarea {
   width: 100%;
   padding: 0.75rem 0.9rem;
   background: rgba(0, 0, 0, 0.25);
@@ -347,9 +348,16 @@ select {
 
 input[type="text"]:focus,
 input[type="number"]:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px var(--color-primary-glow);
+}
+
+textarea {
+  resize: vertical;
+  font-family: var(--font-body);
+  line-height: 1.4;
 }
 
 .input-prefix ~ input {
@@ -484,10 +492,11 @@ select:focus {
 [data-tooltip]::before {
   content: attr(data-tooltip);
   position: absolute;
-  bottom: 125%;
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
+  top: 125%;
+  right: 0;
+  transform: translateY(-4px);
   width: 220px;
+  max-width: min(220px, 80vw);
   padding: 0.5rem 0.75rem;
   background: #0b0f19;
   border: 1px solid var(--border-color);
@@ -507,30 +516,7 @@ select:focus {
 [data-tooltip]:hover::before {
   opacity: 1;
   visibility: visible;
-  transform: translateX(-50%) translateY(0);
-}
-
-/* Scanner Input Row */
-.scanner-input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.scanner-input-row .input-group {
-  margin-bottom: 0;
-}
-
-.scanner-input-row .btn {
-  height: 42px;
-}
-
-@media (max-width: 480px) {
-  .scanner-input-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
+  transform: translateY(0);
 }
 
 /* Data Tables */
@@ -611,12 +597,6 @@ select:focus {
   color: var(--color-danger);
 }
 
-.scanner-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 1rem;
-}
 
 /* Calculator Results */
 .calculator-results {
@@ -776,6 +756,7 @@ select:focus {
 
 .text-profit { color: var(--color-primary) !important; }
 .text-loss { color: var(--color-danger) !important; }
+.text-muted { color: var(--text-muted); font-size: 0.75rem; }
 
 .trade-card-grid {
   display: grid;

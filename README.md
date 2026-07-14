@@ -10,11 +10,12 @@ A sleek, premium dark-mode web application designed to automate the calculations
 
 This tracker strictly automates the mathematical rules of the **Efficient Trader Strategy**:
 
+0. **Macro Filter**: Confirm Stage 2 is the dominant market regime before opening new positions; a failed filter auto-cancels any outstanding GTC orders.
 1. **Find the Stock**: Run Stage 2 filters on NepseAlpha (SMA rising, high RS, < 10% from 52-week high) and pick the stock closest to its high.
 2. **Planned Entry**: Determine planned entry price.
-3. **Calculate Position Sizing**: Compute position size based on a strict 1% account risk threshold.
-4. **Execution Check**: Verify that actual average entry price is not > 2% higher than planned (safety check).
-5. **Set Stop**: Define initial stop at $2.5 \times \text{ATR}(14)$ distance.
+3. **Calculate Position Sizing**: Compute position size so each position risks exactly **1% of account value** (5% total across 5 slots).
+4. **Place GTC Limit Order**: Log the order as pending. It auto-cancels if unfilled after 5 trading days, or if a day's close drops below the planned stop.
+5. **Set Stop**: Once filled, define the initial stop at the actual average purchase price minus $2.5 \times \text{ATR}(14)$.
 6. **Trailing Stop**: Raise stop only if the new candidate stop is higher than the previous stop.
 7. **Exit**: Trigger sell warning if the closing price drops below the trailing stop.
 
@@ -23,8 +24,8 @@ This tracker strictly automates the mathematical rules of the **Efficient Trader
 ## Features
 
 - **Account Capital Management**: Track account value and compute exact risk values automatically.
-- **Super Performance Scanner**: Input prospective stocks and immediately find the best-performing candidate.
-- **Position Sizing Calculator**: Computes stops, risk-per-share, and suggests exact rounded share amounts.
+- **Position Sizing Calculator**: Computes stops, risk-per-share, and suggests exact rounded share amounts using a strict 1%-of-account risk per position.
+- **Pending Orders (Daily Re-Priced Day Orders)**: Places a Day Order that's cancelled by NEPSE at session end and manually resubmitted each day at the *previous close*, since NEPSE's daily circuit band is computed off the prior close and a stale multi-day limit price can drift outside the tradeable range. Each day's close and fresh ATR(14) reprice both the order and its stop (`new stop = new price − 2.5×ATR`); since risk-per-share is always `2.5×ATR` by construction, the target share count is recomputed daily from ATR alone. There's no cap on how far the price can drift day to day — the only hard stops are (1) the close breaking the *current* day's stop, which cancels immediately, or (2) hitting 5 total day-order attempts. Shares already filled from earlier days are never discarded — only the unfilled remainder is dropped on cancellation. Selling is symmetric: log a partial sale any day liquidity can't absorb the full exit, and the tool tracks a running exit VWAP until the position is fully closed.
 - **Actual Risk % Log**: Visualizes exact capital risk (e.g. `Risk: 0.94%`) on every active trade card to account for share rounding and execution pricing.
 - **Daily Updates & Exits**: Enter daily prices/ATR values to automatically adjust trailing stops and generate instant exit flags.
 - **Historical Log & P&L Adjustment**: Archive closed positions and auto-adjust account equity based on realized profit/loss.
@@ -57,14 +58,20 @@ This tracker strictly automates the mathematical rules of the **Efficient Trader
 
 ## Key Calculations Implemented
 
-- **Max Risk Amount**:
-  $$\text{Max Risk} = \text{Account Value} \times 0.01$$
+- **Max Risk per Position**:
+  $$\text{Max Risk} = \text{Account Value} \times 1\%$$
+
+- **Planned/Initial Stop**:
+  $$\text{Stop} = \text{Entry Price} - (2.5 \times \text{ATR}(14))$$
 
 - **Risk Per Share**:
-  $$\text{Risk Per Share} = 2.5 \times \text{ATR}(14)$$
+  $$\text{Risk Per Share} = \text{Entry Price} - \text{Stop}$$
 
-- **Initial Stop**:
-  $$\text{Initial Stop} = \text{Average Execution Price} - (2.5 \times \text{ATR}(14))$$
+- **Position Size**:
+  $$\text{Position Size} = \left\lfloor \frac{\text{Max Risk}}{\text{Risk Per Share}} \right\rfloor$$
+
+- **Initial Stop (after fill)**:
+  $$\text{Initial Stop} = \text{Actual Average Purchase Price} - (2.5 \times \text{ATR}(14))$$
 
 - **Candidate Stop**:
   $$\text{Candidate Stop} = \text{Highest Close Since Entry} - (2.5 \times \text{ATR}(14))$$
