@@ -577,6 +577,14 @@ function setupEventListeners() {
       return;
     }
 
+    // Guard: duplicate ticker. Checked before the cash guard below so that if
+    // both conditions are true, the person sees the more specific/actionable
+    // "already have this ticker" message rather than a misleading cash error.
+    if (state.pendingOrders.some(o => o.ticker === ticker) || state.activeTrades.some(t => t.ticker === ticker)) {
+      await appAlert(`${ticker} already has a pending order or open position.`);
+      return;
+    }
+
     const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
     const plannedStop = entry - (ATR_MULTIPLIER * atr);
     const riskPerShare = entry - plannedStop;
@@ -599,11 +607,6 @@ function setupEventListeners() {
           ? `You could afford ${affordableSize} share(s) with available cash, but that would under-risk this position relative to your 1% target. Consider skipping this trade or freeing up cash first.`
           : `You have no cash available to open this position — a slot is committed but capital is already fully deployed.`)
       );
-      return;
-    }
-
-    if (state.pendingOrders.some(o => o.ticker === ticker) || state.activeTrades.some(t => t.ticker === ticker)) {
-      await appAlert(`${ticker} already has a pending order or open position.`);
       return;
     }
 
