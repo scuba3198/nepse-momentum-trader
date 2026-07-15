@@ -92,6 +92,54 @@
         </div>
       </div>
 
+      <!-- STEP 01: SCREENER SHORTLIST (Trend Template + RS gate, VCP ranked) -->
+      <div class="dashboard-card glass-panel" id="screener-section">
+        <div class="card-header">
+          <span class="step-num">01</span>
+          <h2>Screener Shortlist</h2>
+          <span class="tooltip" data-tooltip="Copy rows from NepseAlpha's Minervini SEPA screener chart and paste below. A stock must clear both the Trend Template and Relative Strength thresholds to qualify. Qualifying stocks are ranked by RS Score (leadership strength) first, then VCP Pattern Score as a tiebreaker (tighter base = more actionable entry)."><i class="fa-solid fa-circle-info"></i></span>
+        </div>
+        <div class="card-body">
+          <p class="macro-desc">Gate: Trend Template &amp; RS Score &ge; <span id="screener-threshold-label">75</span>. Showing top 5 passers, ranked by RS Score (VCP as tiebreaker).</p>
+
+          <div class="input-group liquidity-input-group">
+            <label for="screener-bulk-paste">Paste rows from NepseAlpha's <strong>Minervini SEPA</strong> screener chart (Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS — copy directly from the table, one row per stock)</label>
+            <textarea id="screener-bulk-paste" rows="4" placeholder="ALBSL	73	100	25	84	59	71	99&#10;SBL	62	100	50	38	29	63	94"></textarea>
+          </div>
+          <div class="calculator-action">
+            <button id="screener-bulk-parse-btn" class="btn btn-primary" style="width:100%;"><i class="fa-solid fa-wand-magic-sparkles"></i> Parse &amp; Add All</button>
+          </div>
+
+          <div class="filter-btn-group" id="screener-filter-group">
+            <button class="filter-btn active" data-filter="top5">Top 5</button>
+            <button class="filter-btn" data-filter="passing">All Passing</button>
+            <button class="filter-btn" data-filter="failing">Failing</button>
+            <button class="filter-btn" data-filter="all">All</button>
+          </div>
+
+          <div class="table-container" style="margin-top: 1rem;">
+            <table class="data-table" id="screener-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Trend Tmpl</th>
+                  <th>RS</th>
+                  <th>VCP</th>
+                  <th>Gate</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="screener-list">
+                <tr class="empty-row">
+                  <td colspan="6">No candidates entered yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="macro-desc" id="screener-summary" style="margin-top: 0.6rem; font-size: 0.75rem; color: var(--text-dimmed);"></p>
+        </div>
+      </div>
+
       <!-- STEPS 2 & 3: CALCULATOR -->
       <div class="dashboard-card glass-panel" id="calculator-section">
         <div class="card-header">

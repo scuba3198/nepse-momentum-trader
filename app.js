@@ -9,13 +9,26 @@ const TOTAL_PORTFOLIO_RISK_PCT = RISK_PER_POSITION_PCT * PORTFOLIO_SLOTS;  // 5%
 const ATR_MULTIPLIER = 2.5;
 const MAX_DAY_ORDER_ATTEMPTS = 5;            // Give up after 5 daily re-priced attempts if never filled
 
+// Screener Shortlist gate thresholds (Step 01): a candidate must clear BOTH
+// the Trend Template and Relative Strength scores to "pass". VCP Pattern
+// Score is NOT a gate — it's used only to rank passers (tighter base first).
+const SCREENER_TT_THRESHOLD = 75;
+const SCREENER_RS_THRESHOLD = 75;
+const SCREENER_TOP_N = 5; // Portfolio has 5 slots — only show the top-ranked passers
+
+// Which subset of screener candidates is currently displayed. This is a
+// transient view preference (not persisted to state/export) — it always
+// resets to 'top5' on reload, matching the app's default actionable view.
+let screenerFilterMode = 'top5'; // 'top5' | 'passing' | 'failing' | 'all'
+
 // Application State
 let state = {
   accountValue: 1000000.00,
   stage2IsLeading: false,   // Step 0: Broad Market Macro Filter
   pendingOrders: [],        // Step 4: GTC Limit Orders awaiting fill
   activeTrades: [],
-  history: []
+  history: [],
+  screenerCandidates: []    // Step 01: { ticker, tt, rs, vcp }
 };
 
 // DOM Elements
@@ -35,6 +48,14 @@ const elements = {
   macroNoBtn: document.getElementById('macro-no-btn'),
   macroStatusText: document.getElementById('macro-status-text'),
   haltBanner: document.getElementById('halt-banner'),
+
+  // Screener Shortlist (Step 01)
+  screenerBulkPaste: document.getElementById('screener-bulk-paste'),
+  screenerBulkParseBtn: document.getElementById('screener-bulk-parse-btn'),
+  screenerList: document.getElementById('screener-list'),
+  screenerFilterGroup: document.getElementById('screener-filter-group'),
+  screenerSummary: document.getElementById('screener-summary'),
+  screenerThresholdLabel: document.getElementById('screener-threshold-label'),
 
   // Calculator
   calcTicker: document.getElementById('calc-ticker'),
@@ -307,6 +328,16 @@ function importState(event) {
 
       state.history = Array.isArray(importedState.history) ? importedState.history : [];
 
+      state.screenerCandidates = Array.isArray(importedState.screenerCandidates) ? importedState.screenerCandidates : [];
+      state.screenerCandidates = state.screenerCandidates
+        .filter(c => c && typeof c.ticker === 'string' && c.ticker.trim() !== '')
+        .map(c => ({
+          ticker: c.ticker.toUpperCase().trim(),
+          tt: sanitizeNumber(c.tt, 0),
+          rs: sanitizeNumber(c.rs, 0),
+          vcp: sanitizeNumber(c.vcp, 0)
+        }));
+
       saveState();
 
       const droppedCount = droppedOrders.length + droppedTrades.length;
@@ -366,6 +397,16 @@ function loadState() {
         });
 
         state.history = Array.isArray(parsed.history) ? parsed.history : [];
+
+        state.screenerCandidates = Array.isArray(parsed.screenerCandidates) ? parsed.screenerCandidates : [];
+        state.screenerCandidates = state.screenerCandidates
+          .filter(c => c && typeof c.ticker === 'string' && c.ticker.trim() !== '')
+          .map(c => ({
+            ticker: c.ticker.toUpperCase().trim(),
+            tt: sanitizeNumber(c.tt, 0),
+            rs: sanitizeNumber(c.rs, 0),
+            vcp: sanitizeNumber(c.vcp, 0)
+          }));
       }
     } catch (e) {
       console.error('Failed to parse saved state:', e);
@@ -449,6 +490,15 @@ function setupEventListeners() {
     saveState();
   });
 
+  // --- Screener Shortlist (Step 01) ---
+  elements.screenerFilterGroup.querySelectorAll('.filter-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      screenerFilterMode = btn.getAttribute('data-filter');
+      renderScreenerTable();
+    });
+  });
+  elements.screenerBulkParseBtn.addEventListener('click', bulkAddScreenerCandidates);
+
   // --- Account Value Modal ---
   elements.editAccountBtn.addEventListener('click', () => {
     elements.modalAccountValue.value = state.accountValue;
@@ -479,12 +529,15 @@ function setupEventListeners() {
           stage2IsLeading: false,
           pendingOrders: [],
           activeTrades: [],
-          history: []
+          history: [],
+          screenerCandidates: []
         };
         elements.calcTicker.value = '';
         elements.calcEntry.value = '';
         elements.calcAtr.value = '';
         elements.calcLiquidity.value = '';
+        elements.screenerBulkPaste.value = '';
+        screenerFilterMode = 'top5';
         elements.routineSelect.value = '';
         elements.routineClose.value = '';
         elements.routineAtr.value = '';
@@ -1017,11 +1070,227 @@ function calculatePosition() {
 function renderAll() {
   renderMacroFilter();
   renderHeader();
+  renderScreenerTable();
   renderPendingOrders();
   renderActiveTrades();
   renderDailyRoutineDropdown();
   renderHistory();
   calculatePosition(); // Refresh calculator state/buttons
+}
+
+// --------------------------------------------------------------------------
+// Screener Shortlist (Step 01)
+// Gate: Trend Template Score AND RS Score must both clear their thresholds.
+// Passers are ranked RS descending (leadership strength, Minervini's primary
+// quality signal), with VCP Pattern Score descending as a tiebreaker (base
+// tightness = timing quality, not overall priority). VCP is never the gate
+// and never the primary sort key.
+// --------------------------------------------------------------------------
+
+// Parses rows copy-pasted from NepseAlpha's screener table. Expected column
+// order per row: Symbol, Final Score, Trend Template Score, VCP Pattern
+// Score, EPS Growth Score, Sales Growth Score, Margin Score, RS Score —
+// matching the table exactly as it appears on-screen (8 fields total).
+// Only Trend Template, VCP, and RS are kept; Final/EPS/Sales/Margin are
+// parsed just to correctly locate RS at the end of the row, then discarded.
+// Tolerant of tab-separated or multi-space-separated paste, and silently
+// skips header rows / malformed lines rather than throwing.
+// Flattens pasted text into a single stream of tokens, regardless of whether
+// each row is on one line (tab or space separated) or each individual field
+// is on its own line (NepseAlpha's actual copy behavior — Symbol, then each
+// of the 7 scores, one per line, repeating per stock).
+function tokenizePastedScreenerText(text) {
+  const tokens = [];
+  text.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    trimmed.split(/\t+|\s+/).forEach((part) => {
+      const p = part.trim();
+      if (p !== '') tokens.push(p);
+    });
+  });
+  return tokens;
+}
+
+function isNumericScoreToken(t) {
+  const cleaned = t.replace(/[^0-9.\-]/g, '');
+  return cleaned !== '' && cleaned !== '-' && cleaned !== '.' && /^-?\d+(\.\d+)?$/.test(cleaned) && isFinite(parseFloat(cleaned));
+}
+
+// Scans the token stream for the pattern: Symbol, Final, TrendTemplate, VCP,
+// EPS, Sales, Margin, RS (8 tokens per stock). Works whether that pattern
+// arrived as one row per line or one field per line, since both collapse to
+// the same flat token stream. Anything that doesn't fit the pattern (header
+// words, stray text) is skipped rather than aborting the whole paste.
+function parsePastedScreenerText(text) {
+  const tokens = tokenizePastedScreenerText(text);
+  const results = [];
+  let skippedCount = 0;
+  let i = 0;
+
+  while (i < tokens.length) {
+    const symbolCandidate = tokens[i];
+    const looksLikeSymbol = !isNumericScoreToken(symbolCandidate) && /^[A-Za-z][A-Za-z0-9]{1,9}$/.test(symbolCandidate);
+
+    if (looksLikeSymbol && i + 7 < tokens.length) {
+      const window = tokens.slice(i + 1, i + 8);
+      if (window.every(isNumericScoreToken)) {
+        const nums = window.map(t => parseFloat(t.replace(/[^0-9.\-]/g, '')));
+        const [, tt, vcp, , , , rs] = nums; // final, tt, vcp, eps, sales, margin, rs
+        results.push({ ticker: symbolCandidate.toUpperCase(), tt, vcp, rs });
+        i += 8;
+        continue;
+      }
+    }
+
+    skippedCount++;
+    i += 1;
+  }
+
+  const skipped = skippedCount > 0 ? [`${skippedCount} unmatched token(s) ignored (likely headers/labels)`] : [];
+  return { results, skipped };
+}
+
+function bulkAddScreenerCandidates() {
+  const raw = elements.screenerBulkPaste.value;
+  if (!raw || !raw.trim()) {
+    appAlert('Paste some screener rows first.');
+    return;
+  }
+
+  const { results, skipped } = parsePastedScreenerText(raw);
+
+  if (results.length === 0) {
+    appAlert('No valid rows found. Expected: Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS — tab or space separated, one row per line.');
+    return;
+  }
+
+  // A fresh paste replaces the entire shortlist rather than merging with
+  // whatever was there before — each paste is treated as this session's
+  // full, current screener snapshot.
+  state.screenerCandidates = results;
+
+  elements.screenerBulkPaste.value = '';
+  saveState();
+
+  const skippedNote = skipped.length > 0
+    ? `\n\n${skipped.length} row(s) skipped (headers or malformed): ${skipped.slice(0, 3).join(' | ')}${skipped.length > 3 ? '…' : ''}`
+    : '';
+  appAlert(`Shortlist replaced with ${results.length} candidate(s).${skippedNote}`);
+}
+
+function removeScreenerCandidate(ticker) {
+  state.screenerCandidates = state.screenerCandidates.filter(c => c.ticker !== ticker);
+  saveState();
+}
+
+function useScreenerCandidate(ticker) {
+  elements.calcTicker.value = ticker;
+  calculatePosition();
+  elements.calcTicker.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  elements.calcEntry.focus();
+}
+
+// VCP Pattern Score isn't a gate or a primary rank — it's an entry-timing
+// read: has this already-qualified, already-ranked stock actually formed a
+// tight base yet, or is it still extended/choppy with no clean setup?
+function getVcpFlag(vcp) {
+  if (vcp < 50) return { label: 'No Base Yet', cls: 'low' };
+  if (vcp < 75) return { label: 'Forming', cls: 'mid' };
+  return { label: 'Tight Base', cls: 'high' };
+}
+
+function renderScreenerTable() {
+  elements.screenerThresholdLabel.textContent = `${SCREENER_TT_THRESHOLD}`;
+  elements.screenerList.innerHTML = '';
+
+  // Reflect the active filter mode on the toggle buttons
+  elements.screenerFilterGroup.querySelectorAll('.filter-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-filter') === screenerFilterMode);
+  });
+
+  if (state.screenerCandidates.length === 0) {
+    elements.screenerList.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="6">No candidates entered yet.</td>
+      </tr>
+    `;
+    elements.screenerSummary.textContent = '';
+    return;
+  }
+
+  // Passers (TT & RS both clear threshold) are ranked RS descending first —
+  // RS Rating is Minervini's leadership/strength ranking among qualified
+  // stocks. VCP Pattern Score is used only as a tiebreaker: among stocks of
+  // equal leadership strength, the one with the tighter/cleaner base is the
+  // more actionable entry right now. VCP is never the primary sort — it's a
+  // timing/base-quality check, not a strength ranking.
+  const allPassers = state.screenerCandidates
+    .filter(c => c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD)
+    .sort((a, b) => (b.rs - a.rs) || (b.vcp - a.vcp));
+  const allFailers = state.screenerCandidates
+    .filter(c => !(c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD))
+    .sort((a, b) => (b.rs - a.rs) || (b.vcp - a.vcp));
+
+  let shown = [];
+  let summaryText = '';
+
+  if (screenerFilterMode === 'top5') {
+    shown = allPassers.slice(0, SCREENER_TOP_N);
+    const hiddenPasserCount = allPassers.length - shown.length;
+    const parts = [];
+    if (hiddenPasserCount > 0) parts.push(`${hiddenPasserCount} more passing candidate(s) ranked below the top ${SCREENER_TOP_N}`);
+    if (allFailers.length > 0) parts.push(`${allFailers.length} candidate(s) failed the gate`);
+    summaryText = parts.join(' · ');
+  } else if (screenerFilterMode === 'passing') {
+    shown = allPassers;
+    summaryText = allFailers.length > 0 ? `${allFailers.length} candidate(s) failed the gate (hidden)` : '';
+  } else if (screenerFilterMode === 'failing') {
+    shown = allFailers;
+    summaryText = allPassers.length > 0 ? `${allPassers.length} candidate(s) passed the gate (hidden)` : '';
+  } else {
+    // 'all'
+    shown = [...allPassers, ...allFailers];
+    summaryText = '';
+  }
+
+  if (shown.length === 0) {
+    const emptyMsg = screenerFilterMode === 'failing'
+      ? 'No candidates are currently failing the gate.'
+      : 'No candidates currently pass the Trend Template &amp; RS gate.';
+    elements.screenerList.innerHTML = `
+      <tr class="empty-row">
+        <td colspan="6">${emptyMsg}</td>
+      </tr>
+    `;
+  } else {
+    shown.forEach((c) => {
+      const passes = c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD;
+      const vcpFlag = getVcpFlag(c.vcp);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${escapeHTML(c.ticker)}</strong></td>
+        <td>${c.tt}</td>
+        <td>${c.rs}</td>
+        <td>${c.vcp}<span class="vcp-flag ${vcpFlag.cls}">${vcpFlag.label}</span></td>
+        <td><span class="gate-badge ${passes ? 'pass' : 'fail'}">${passes ? 'PASS' : 'FAIL'}</span></td>
+        <td style="display:flex; gap:0.4rem; align-items:center; justify-content:flex-end;">
+          ${passes ? `<button class="screener-use-btn" data-ticker="${escapeHTML(c.ticker)}"><i class="fa-solid fa-arrow-right"></i> Use</button>` : ''}
+          <button class="screener-row-remove" data-remove="${escapeHTML(c.ticker)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+        </td>
+      `;
+      elements.screenerList.appendChild(tr);
+    });
+  }
+
+  elements.screenerSummary.textContent = summaryText;
+
+  elements.screenerList.querySelectorAll('.screener-use-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => useScreenerCandidate(e.currentTarget.getAttribute('data-ticker')));
+  });
+  elements.screenerList.querySelectorAll('.screener-row-remove').forEach(btn => {
+    btn.addEventListener('click', (e) => removeScreenerCandidate(e.currentTarget.getAttribute('data-remove')));
+  });
 }
 
 function renderMacroFilter() {

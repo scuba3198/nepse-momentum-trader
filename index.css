@@ -381,6 +381,88 @@ textarea {
   gap: 1rem;
 }
 
+.screener-add-grid {
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+}
+
+@media (max-width: 640px) {
+  .screener-add-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.gate-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.gate-badge.pass {
+  background: var(--color-primary-glow);
+  color: var(--color-primary);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.gate-badge.fail {
+  background: var(--color-danger-glow);
+  color: var(--color-danger);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.vcp-flag {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-top: 0.15rem;
+  text-transform: uppercase;
+}
+
+.vcp-flag.low {
+  color: var(--color-danger);
+}
+
+.vcp-flag.mid {
+  color: var(--color-accent);
+}
+
+.vcp-flag.high {
+  color: var(--color-primary);
+}
+
+.screener-row-remove {
+  background: none;
+  border: none;
+  color: var(--text-dimmed);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: color var(--transition-fast);
+}
+
+.screener-row-remove:hover {
+  color: var(--color-danger);
+}
+
+.screener-use-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  white-space: nowrap;
+}
+
+.screener-use-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
 @media (max-width: 480px) {
   .form-grid {
     grid-template-columns: 1fr;
@@ -988,6 +1070,40 @@ textarea {
 
 .macro-btn.inactive-btn {
   opacity: 0.4;
+}
+
+.filter-btn-group {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  flex: 1;
+  min-width: 90px;
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-align: center;
+}
+
+.filter-btn:hover {
+  border-color: var(--border-color-hover);
+  color: var(--text-main);
+}
+
+.filter-btn.active {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #6ee7b7;
 }
 
 /* Macro Status Text */
