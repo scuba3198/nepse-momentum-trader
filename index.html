@@ -5,13 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ATR Desk // NEPSE Momentum Tracker</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <!-- Google Fonts: Syne (Display) & Plus Jakarta Sans (Body) -->
+  <!-- Fraunces (display serif — mastheads & section titles), Inter (body), IBM Plex Mono (data/tickers only) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="index.css">
+  <script>
+    (function () {
+      var saved = localStorage.getItem('atr-desk-theme');
+      var theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
 </head>
 <body>
   <div class="glow-container">
@@ -20,51 +27,73 @@
   </div>
 
   <header class="app-header">
-    <div class="header-logo">
-      <span class="logo-symbol">
-        <svg width="26" height="26" viewBox="0 0 160 160" aria-hidden="true">
-          <line x1="55" y1="120" x2="55" y2="95" stroke="#000" stroke-width="8"/>
-          <rect x="45" y="75" width="20" height="30" fill="#000" rx="2"/>
-          <line x1="90" y1="105" x2="90" y2="60" stroke="#000" stroke-width="8"/>
-          <rect x="80" y="45" width="20" height="35" fill="#000" rx="2"/>
-          <path d="M110 60 L135 30 L128 30 M135 30 L135 37" fill="none" stroke="#000" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-      <div class="logo-text">
-        <h1>ATR Desk</h1>
-        <p>NEPSE MOMENTUM TRACKER</p>
+    <div class="header-top">
+      <div class="header-logo">
+        <span class="logo-symbol">
+          <svg width="22" height="22" viewBox="0 0 160 160" aria-hidden="true">
+            <line x1="55" y1="120" x2="55" y2="95" stroke="#000" stroke-width="8"/>
+            <rect x="45" y="75" width="20" height="30" fill="#000" rx="2"/>
+            <line x1="90" y1="105" x2="90" y2="60" stroke="#000" stroke-width="8"/>
+            <rect x="80" y="45" width="20" height="35" fill="#000" rx="2"/>
+            <path d="M110 60 L135 30 L128 30 M135 30 L135 37" fill="none" stroke="#000" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <div class="logo-text">
+          <h1>ATR Desk</h1>
+          <p>NEPSE Momentum Tracker</p>
+        </div>
+      </div>
+      <div class="header-top-right">
+        <span id="strategy-state" class="state-badge cash">CASH (100% FREE)</span>
+        <div class="header-action-btns">
+          <button id="theme-toggle-btn" title="Toggle dark mode" class="header-icon-btn"><i class="fa-solid fa-moon"></i></button>
+          <button id="export-btn" title="Export Data as JSON" class="header-icon-btn"><i class="fa-solid fa-file-arrow-down"></i></button>
+          <button id="import-btn" title="Import Data from JSON" class="header-icon-btn"><i class="fa-solid fa-file-arrow-up"></i></button>
+          <button id="reset-app-btn" title="Reset All Data" class="header-icon-btn danger-icon"><i class="fa-solid fa-trash-can-arrow-up"></i></button>
+        </div>
+        <input type="file" id="import-file-input" accept=".json" style="display:none;">
       </div>
     </div>
-    <div class="header-stats">
-      <div class="stat-card mini">
-        <span class="stat-label">ACCOUNT VALUE</span>
-        <div class="stat-value-group">
+    <div class="header-hero">
+      <div class="hero-stat">
+        <span class="stat-label">Account Value</span>
+        <div class="hero-value-group">
           <span class="currency">NPR</span>
-          <span id="header-account-value">1,000,000.00</span>
+          <span id="header-account-value" class="hero-value">1,000,000.00</span>
           <button id="edit-account-btn" title="Edit Account Value"><i class="fa-solid fa-pen-to-square"></i></button>
         </div>
       </div>
-      <div class="stat-card mini">
-        <span class="stat-label">PORTFOLIO SLOTS</span>
-        <div class="stat-value-group">
-          <span id="header-slots-count" class="slots-badge">0 / 5</span>
-        </div>
+      <div class="hero-stat hero-stat-secondary">
+        <span class="stat-label">Portfolio Slots</span>
+        <span id="header-slots-count" class="slots-badge">0 / 5</span>
       </div>
-      <div class="stat-card mini">
-        <span class="stat-label">STRATEGY STATE</span>
-        <div class="stat-value-group" style="justify-content: space-between; width: 100%;">
-          <span id="strategy-state" class="state-badge cash">CASH (100% FREE)</span>
-          <div class="header-action-btns">
-            <button id="export-btn" title="Export Data as JSON" class="header-icon-btn"><i class="fa-solid fa-file-arrow-down"></i></button>
-            <button id="import-btn" title="Import Data from JSON" class="header-icon-btn"><i class="fa-solid fa-file-arrow-up"></i></button>
-            <button id="reset-app-btn" title="Reset All Data" class="header-icon-btn danger-icon"><i class="fa-solid fa-trash-can-arrow-up"></i></button>
-          </div>
-        </div>
-      </div>
-      <!-- Hidden file input for import -->
-      <input type="file" id="import-file-input" accept=".json" style="display:none;">
     </div>
   </header>
+
+  <!-- STEP 0: BROAD MARKET MACRO FILTER — the single gate everything below depends on -->
+  <div class="dashboard-card glass-panel macro-hero" id="macro-filter-section">
+    <div class="card-header">
+      <span class="step-num">00</span>
+      <h2>Broad Market Macro Filter</h2>
+      <span class="tooltip" data-tooltip="Check NepseAlpha Stage Analysis. Stage 2 (Uptrend) must have the highest stock count among all 4 stages before trading."><i class="fa-solid fa-circle-info"></i></span>
+    </div>
+    <div class="card-body">
+      <p class="macro-desc">Check the NepseAlpha Stage Analysis chart. Is <strong>Stage 2 (Uptrend)</strong> the regime with the <em>highest stock count</em>?</p>
+      <div class="macro-toggle-group">
+        <button id="macro-yes-btn" class="macro-btn macro-btn-yes">
+          <i class="fa-solid fa-circle-check"></i>
+          Yes — Stage 2 is Leading
+        </button>
+        <button id="macro-no-btn" class="macro-btn macro-btn-no active-no">
+          <i class="fa-solid fa-circle-xmark"></i>
+          No — Do Not Trade
+        </button>
+      </div>
+      <div id="macro-status-text" class="macro-status-text halted">
+        <i class="fa-solid fa-ban"></i> Market regime does not favour trading. Stay in cash.
+      </div>
+    </div>
+  </div>
 
   <!-- HALT BANNER (shown when Stage 2 is not dominant) -->
   <div id="halt-banner" class="halt-banner" style="display:none;">
@@ -75,31 +104,6 @@
   <main class="dashboard-grid">
     <!-- COLUMN 1: MACRO FILTER + SCANNER + CALCULATOR -->
     <section class="grid-column">
-
-      <!-- STEP 0: BROAD MARKET MACRO FILTER -->
-      <div class="dashboard-card glass-panel" id="macro-filter-section">
-        <div class="card-header">
-          <span class="step-num">00</span>
-          <h2>Broad Market Macro Filter</h2>
-          <span class="tooltip" data-tooltip="Check NepseAlpha Stage Analysis. Stage 2 (Uptrend) must have the highest stock count among all 4 stages before trading."><i class="fa-solid fa-circle-info"></i></span>
-        </div>
-        <div class="card-body">
-          <p class="macro-desc">Check the NepseAlpha Stage Analysis chart. Is <strong>Stage 2 (Uptrend)</strong> the regime with the <em>highest stock count</em>?</p>
-          <div class="macro-toggle-group">
-            <button id="macro-yes-btn" class="macro-btn macro-btn-yes">
-              <i class="fa-solid fa-circle-check"></i>
-              Yes — Stage 2 is Leading
-            </button>
-            <button id="macro-no-btn" class="macro-btn macro-btn-no active-no">
-              <i class="fa-solid fa-circle-xmark"></i>
-              No — Do Not Trade
-            </button>
-          </div>
-          <div id="macro-status-text" class="macro-status-text halted">
-            <i class="fa-solid fa-ban"></i> Market regime does not favour trading. Stay in cash.
-          </div>
-        </div>
-      </div>
 
       <!-- STEP 01: SCREENER SHORTLIST (Trend Template + RS gate, VCP ranked) -->
       <div class="dashboard-card glass-panel" id="screener-section">
@@ -145,7 +149,7 @@
               </tbody>
             </table>
           </div>
-          <p class="macro-desc" id="screener-summary" style="margin-top: 0.6rem; font-size: 0.75rem; color: var(--text-dimmed);"></p>
+          <p class="macro-desc" id="screener-summary" style="margin-top: 0.6rem; font-size: 0.75rem; color: var(--paper-faint);"></p>
         </div>
       </div>
 
@@ -178,8 +182,8 @@
             <div class="input-group">
               <label for="calc-risk-pct">Risk per Position</label>
               <div class="input-wrapper">
-                <input type="number" id="calc-risk-pct" value="1.00" readonly class="readonly-input">
                 <span class="input-suffix">%</span>
+                <input type="number" id="calc-risk-pct" value="1.00" readonly class="readonly-input">
               </div>
             </div>
           </div>
@@ -378,5 +382,23 @@
   </div>
 
   <script src="app.js"></script>
+  <script>
+    (function () {
+      var btn = document.getElementById('theme-toggle-btn');
+      var icon = btn.querySelector('i');
+      function sync() {
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        icon.className = isDark ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+        btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+      }
+      sync();
+      btn.addEventListener('click', function () {
+        var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('atr-desk-theme', next);
+        sync();
+      });
+    })();
+  </script>
 </body>
 </html>

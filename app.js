@@ -7,6 +7,7 @@ const PORTFOLIO_SLOTS = 5;
 const RISK_PER_POSITION_PCT = 0.01;                                        // 1% of account value, per position
 const TOTAL_PORTFOLIO_RISK_PCT = RISK_PER_POSITION_PCT * PORTFOLIO_SLOTS;  // 5% with all slots filled
 const ATR_MULTIPLIER = 2.5;
+const MIN_LOT_SIZE = 10; // NEPSE: odd lots under 10 shares are a hassle to buy/sell — don't recommend them
 const MAX_DAY_ORDER_ATTEMPTS = 5;            // Give up after 5 daily re-priced attempts if never filled
 
 // Screener Shortlist gate thresholds (Step 01): a candidate must clear BOTH
@@ -229,7 +230,7 @@ function sanitizeNumber(value, fallback) {
 
 function formatNPR(value) {
   if (!isFinite(value)) return '0.00';
-  return new Intl.NumberFormat('en-NP', {
+  return new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(value);
@@ -968,6 +969,7 @@ function calculatePosition() {
     elements.resInitialStop.textContent = 'Rs. 0.00';
     elements.resRiskPerShare.textContent = 'Rs. 0.00';
     elements.resPositionSize.textContent = '0 Shares';
+    elements.resPositionSize.style.color = '';
     elements.resCapitalCheck.textContent = 'Rs. 0.00 / Rs. 0.00';
     elements.resCapitalCheck.style.color = '';
     elements.capitalPctTile.style.display = 'none';
@@ -986,6 +988,7 @@ function calculatePosition() {
     elements.resInitialStop.textContent = 'Rs. 0.00 (ATR too high)';
     elements.resRiskPerShare.textContent = 'N/A';
     elements.resPositionSize.textContent = '0 Shares';
+    elements.resPositionSize.style.color = '';
     elements.resCapitalCheck.textContent = 'Rs. 0.00 / Rs. 0.00';
     elements.resCapitalCheck.style.color = '';
     elements.capitalPctTile.style.display = 'none';
@@ -1000,7 +1003,11 @@ function calculatePosition() {
   const positionSize = Math.floor(maxRiskPerPosition / riskPerShare);
 
   if (positionSize > 0) {
-    elements.resPositionSize.textContent = `${positionSize} Shares`;
+    const belowMinLot = positionSize < MIN_LOT_SIZE;
+    elements.resPositionSize.textContent = belowMinLot
+      ? `${positionSize} Shares — below ${MIN_LOT_SIZE}-share minimum, don't buy`
+      : `${positionSize} Shares`;
+    elements.resPositionSize.style.color = belowMinLot ? 'var(--color-danger)' : '';
 
     // Capital availability check (risk-based sizing has no built-in cap on capital deployed)
     const capitalDeployed = getCapitalDeployed();
@@ -1055,10 +1062,12 @@ function calculatePosition() {
       elements.liquidityCheckTile.style.display = 'none';
     }
 
-    // Only enable placing the GTC order if macro filter passes AND slots are available AND cash is sufficient
-    elements.executeTradeBtn.disabled = !macroOk || !slotsAvailable || !cashOk;
+    // Only enable placing the GTC order if macro filter passes AND slots are available AND
+    // cash is sufficient AND the position clears the practical minimum lot size
+    elements.executeTradeBtn.disabled = !macroOk || !slotsAvailable || !cashOk || belowMinLot;
   } else {
     elements.resPositionSize.textContent = '0 Shares (Risk per share too high)';
+    elements.resPositionSize.style.color = '';
     elements.resCapitalCheck.textContent = 'Rs. 0.00 / Rs. 0.00';
     elements.capitalPctTile.style.display = 'none';
     elements.liquidityCheckTile.style.display = 'none';
