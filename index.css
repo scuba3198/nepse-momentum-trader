@@ -201,7 +201,6 @@ body {
    space and line weight, not another panel. */
 .macro-hero {
   margin-bottom: 1.75rem;
-  border-top: 2px solid var(--paper-dim) !important;
   border-bottom: 1px solid var(--line);
   padding-bottom: 0.5rem;
 }
@@ -431,7 +430,7 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 .halt-banner {
   display: flex; align-items: center; gap: 0.75rem;
   background: repeating-linear-gradient(135deg, var(--halt-dim), var(--halt-dim) 10px, rgba(255,92,77,0.08) 10px, rgba(255,92,77,0.08) 20px);
-  border: 1px solid rgba(255,92,77,0.4); border-radius: var(--r-md); color: #ffb3ab;
+  border: 1px solid rgba(255,92,77,0.4); border-radius: var(--r-md); color: var(--halt);
   font-family: var(--font-mono); font-size: 0.82rem; font-weight: 500; padding: 0.8rem 1.2rem; margin-bottom: 1.4rem;
 }
 .halt-banner i { color: var(--halt); font-size: 1rem; flex-shrink: 0; animation: blink-led 1s steps(2, jump-none) infinite; }
@@ -513,13 +512,6 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 }
 
 .app-header { position: relative; animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
-.app-header::after {
-  content: '';
-  display: block;
-  height: 2px;
-  background: var(--paper-dim);
-  animation: draw-rule 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) 0.15s both;
-}
 .macro-hero { animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) 0.1s both; }
 .halt-banner { animation: rise-in 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
 .dashboard-grid .grid-column:first-child { animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) 0.18s both; }
