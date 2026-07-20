@@ -426,6 +426,12 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 .comp-box .value { font-family: var(--font-mono); font-size: 0.92rem; font-weight: 700; }
 
 .dashboard-footer { width: 100%; }
+.footer-credit {
+  text-align: center; margin-top: 1.6rem; font-family: var(--font-mono);
+  font-size: 0.72rem; color: var(--paper-faint); letter-spacing: 0.03em;
+}
+.footer-credit a { color: var(--paper-dim); text-decoration: none; border-bottom: 1px dotted var(--paper-dim); transition: color var(--ease), border-color var(--ease); }
+.footer-credit a:hover { color: var(--clear); border-color: var(--clear); }
 
 .halt-banner {
   display: flex; align-items: center; gap: 0.75rem;
