@@ -470,6 +470,29 @@ function convertOrderToActiveTrade(order) {
 
 function setupEventListeners() {
 
+  // --- Custom number-input spinner buttons (replaces native browser arrows) ---
+  // Delegated at document level so it also covers inputs rendered dynamically
+  // later (e.g. pending-order rows rebuilt on every renderAll()).
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.spin-btn');
+    if (!btn) return;
+    const wrap = btn.closest('.number-spin-wrap');
+    const input = wrap && wrap.querySelector('input[type="number"]');
+    if (!input || input.disabled || input.readOnly) return;
+
+    const step = parseFloat(input.step) || 1;
+    const current = parseFloat(input.value);
+    let next = (isFinite(current) ? current : 0) + (btn.classList.contains('spin-up') ? step : -step);
+
+    if (input.min !== '' && isFinite(parseFloat(input.min))) next = Math.max(next, parseFloat(input.min));
+    if (input.max !== '' && isFinite(parseFloat(input.max))) next = Math.min(next, parseFloat(input.max));
+
+    const decimals = (String(step).split('.')[1] || '').length;
+    input.value = next.toFixed(decimals);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
   // --- Export / Import ---
   elements.exportBtn.addEventListener('click', exportState);
   elements.importBtn.addEventListener('click', () => elements.importFileInput.click());
@@ -1429,24 +1452,44 @@ function renderPendingOrders() {
       <div class="form-grid" style="margin-top: 0.5rem;">
         <div class="input-group">
           <label>Today's Close (required)</label>
-          <div class="input-wrapper">
+          <div class="input-wrapper number-spin-wrap">
             <span class="input-prefix">Rs.</span>
             <input type="number" class="pending-close-input" placeholder="0.00" step="0.01">
+            <div class="spin-buttons">
+              <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
+              <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
+            </div>
           </div>
         </div>
         <div class="input-group">
           <label>Today's ATR(14) (required)</label>
-          <input type="number" class="pending-atr-input" placeholder="0.00" step="0.01">
+          <div class="input-wrapper number-spin-wrap">
+            <input type="number" class="pending-atr-input" placeholder="0.00" step="0.01">
+            <div class="spin-buttons">
+              <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
+              <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
+            </div>
+          </div>
         </div>
         <div class="input-group">
           <label>Shares Filled Today (leave blank if none)</label>
-          <input type="number" class="pending-fill-shares-input" placeholder="0" step="1" max="${order.shares - order.filledShares}">
+          <div class="input-wrapper number-spin-wrap">
+            <input type="number" class="pending-fill-shares-input" placeholder="0" step="1" max="${order.shares - order.filledShares}">
+            <div class="spin-buttons">
+              <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
+              <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
+            </div>
+          </div>
         </div>
         <div class="input-group">
           <label>Fill Price (if any filled today)</label>
-          <div class="input-wrapper">
+          <div class="input-wrapper number-spin-wrap">
             <span class="input-prefix">Rs.</span>
             <input type="number" class="pending-fill-price-input" placeholder="0.00" step="0.01">
+            <div class="spin-buttons">
+              <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
+              <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
+            </div>
           </div>
         </div>
       </div>

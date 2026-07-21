@@ -296,6 +296,40 @@ input[type="text"], input[type="number"], select, textarea {
   font-weight: 500; outline: none; transition: border-color var(--ease), box-shadow var(--ease);
 }
 input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus { border-color: var(--clear); box-shadow: 0 0 0 2px var(--clear-dim); }
+
+/* Hide native number-input spinner arrows everywhere — replaced with themed custom ones */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* Custom spinner buttons */
+.number-spin-wrap input[type="number"] { padding-right: 2rem; }
+.spin-buttons {
+  position: absolute; right: 1px; top: 1px; bottom: 1px; width: 1.6rem;
+  display: flex; flex-direction: column; border-left: 1px solid var(--line);
+  border-radius: 0 var(--r-md) var(--r-md) 0; overflow: hidden;
+}
+.spin-btn {
+  flex: 1 1 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--tint-a); border: none; border-bottom: 1px solid var(--line);
+  cursor: pointer; padding: 0; position: relative; transition: background var(--ease);
+}
+.spin-btn:last-child { border-bottom: none; }
+.spin-btn::before {
+  content: ''; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+}
+.spin-btn.spin-up::before { border-bottom: 5px solid var(--paper-faint); }
+.spin-btn.spin-down::before { border-top: 5px solid var(--paper-faint); }
+.spin-btn:hover { background: var(--clear-dim); }
+.spin-btn:hover::before { border-bottom-color: var(--clear); }
+.spin-btn.spin-down:hover::before { border-top-color: var(--clear); border-bottom-color: transparent; }
+.spin-btn:active { background: var(--clear-dim); }
+input:disabled ~ .spin-buttons .spin-btn,
+input.readonly-input ~ .spin-buttons .spin-btn { cursor: not-allowed; opacity: 0.4; }
+input:disabled ~ .spin-buttons .spin-btn:hover::before,
+input.readonly-input ~ .spin-buttons .spin-btn:hover::before { border-bottom-color: var(--paper-faint); }
+input:disabled ~ .spin-buttons .spin-btn.spin-down:hover::before,
+input.readonly-input ~ .spin-buttons .spin-btn.spin-down:hover::before { border-top-color: var(--paper-faint); }
 textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; font-size: 0.78rem; }
 .input-prefix ~ input { padding-left: 2.5rem; }
 .input-suffix ~ input { padding-right: 2.5rem; }
