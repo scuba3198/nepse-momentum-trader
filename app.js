@@ -850,6 +850,20 @@ function setupEventListeners() {
         return;
       }
 
+      // Below the practical minimum lot size but not zero — same rule the initial
+      // placement calculator enforces (odd lots under MIN_LOT_SIZE aren't recommended).
+      // Nothing has filled yet, so there's nothing to preserve; cancel outright rather
+      // than silently letting a re-price roll the order into an unbuyable lot size.
+      if (newTargetShares > 0 && newTargetShares < MIN_LOT_SIZE && order.filledShares === 0) {
+        const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
+        if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        saveState();
+        await appAlert(
+          `${order.ticker}: today's re-priced risk math only supports ${newTargetShares} share(s), below the ${MIN_LOT_SIZE}-share practical minimum. Order cancelled.`
+        );
+        return;
+      }
+
       if (newTargetShares <= order.filledShares && order.filledShares > 0) {
         // Updated risk math says you already hold at (or above) today's target size —
         // stop trying to buy more; take what you have.
@@ -862,6 +876,11 @@ function setupEventListeners() {
       }
 
       order.shares = Math.max(newTargetShares, order.filledShares);
+      // Keep the risk-tracking basis in sync with what actually sized the order today —
+      // otherwise "Actual Risk %" shown later on the active trade / history would be
+      // computed against a stale account value from the original placement day, even
+      // though the share count above was just resized against TODAY's account value.
+      order.accountValueAtEntry = state.accountValue;
       saveState();
       await appAlert(
         `${order.ticker}: rolled forward for tomorrow — new order: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
