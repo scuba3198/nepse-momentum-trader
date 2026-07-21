@@ -341,6 +341,17 @@ function importState(event) {
 
       saveState();
 
+      // Clear stale form inputs so they don't linger with pre-import values
+      elements.calcTicker.value = '';
+      elements.calcEntry.value = '';
+      elements.calcAtr.value = '';
+      elements.calcLiquidity.value = '';
+      elements.screenerBulkPaste.value = '';
+      screenerFilterMode = 'top5';
+      elements.routineSelect.value = '';
+      elements.routineClose.value = '';
+      elements.routineAtr.value = '';
+
       const droppedCount = droppedOrders.length + droppedTrades.length;
       const droppedNote = droppedCount > 0
         ? `\n\nWarning: ${droppedCount} record(s) had invalid/missing price data and were skipped rather than imported.`
