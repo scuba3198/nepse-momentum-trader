@@ -427,6 +427,122 @@ function loadState() {
 }
 
 // --------------------------------------------------------------------------
+// Hero splash — ASCII-density "chart mountain", built the same way a photo
+// gets turned into a halftone: draw a shape to an offscreen canvas, sample
+// pixel brightness on a grid, and drop a character at each point whose
+// density and opacity follow that brightness. The source shape here is a
+// drawn ascending trend line instead of a photo.
+// --------------------------------------------------------------------------
+
+function initHeroSplash() {
+  const field = document.getElementById('hero-ascii-field');
+  const heroSection = document.getElementById('hero-splash');
+  const cue = document.getElementById('hero-scroll-cue');
+  if (!field || !heroSection) return;
+
+  const CHARS = '01ATRVCP';
+
+  function render() {
+    field.innerHTML = '';
+    const w = field.clientWidth || 1;
+    const h = field.clientHeight || 1;
+
+    // Offscreen canvas: draw an ascending "higher highs, higher lows"
+    // mountain silhouette plus a few background price-node dots.
+    const cw = 240, ch = 240;
+    const canvas = document.createElement('canvas');
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, cw, ch);
+
+    // Sparse background field (like the faint outer dots in a halftone photo)
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    for (let i = 0; i < 90; i++) {
+      const x = Math.random() * cw, y = Math.random() * ch;
+      ctx.fillRect(x, y, 2, 2);
+    }
+
+    // The mountain: a jagged uptrend polyline, filled, with a glow core.
+    const points = [
+      [0, ch * 0.92], [cw * 0.10, ch * 0.80], [cw * 0.18, ch * 0.86],
+      [cw * 0.27, ch * 0.62], [cw * 0.35, ch * 0.70], [cw * 0.44, ch * 0.46],
+      [cw * 0.52, ch * 0.54], [cw * 0.60, ch * 0.30], [cw * 0.68, ch * 0.38],
+      [cw * 0.77, ch * 0.16], [cw * 0.85, ch * 0.24], [cw * 0.93, ch * 0.06],
+      [cw, ch * 0.10]
+    ];
+    ctx.beginPath();
+    ctx.moveTo(0, ch);
+    points.forEach(p => ctx.lineTo(p[0], p[1]));
+    ctx.lineTo(cw, ch);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, ch);
+    grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(1, 'rgba(255,255,255,0.08)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Bright trace along the trend line itself
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    points.forEach(p => ctx.lineTo(p[0], p[1]));
+    ctx.strokeStyle = 'rgba(255,255,255,1)';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    const imgData = ctx.getImageData(0, 0, cw, ch).data;
+
+    // Sample onto a character grid mapped across the field's box
+    const cols = Math.floor(w / 9);
+    const rows = Math.floor(h / 11);
+    const frag = document.createDocumentFragment();
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const sx = Math.floor((c / cols) * cw);
+        const sy = Math.floor((r / rows) * ch);
+        const idx = (sy * cw + sx) * 4;
+        const alpha = imgData[idx + 3] / 255;
+        if (alpha < 0.06) continue;
+        if (Math.random() > (0.35 + alpha * 0.5)) continue;
+
+        const span = document.createElement('span');
+        span.textContent = CHARS[Math.floor(Math.random() * CHARS.length)];
+        span.style.left = (c * 9) + 'px';
+        span.style.top = (r * 11) + 'px';
+        span.style.opacity = Math.min(1, 0.18 + alpha * 0.85).toFixed(2);
+        frag.appendChild(span);
+      }
+    }
+    field.appendChild(frag);
+  }
+
+  render();
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(render, 200);
+  });
+  window.addEventListener('orientationchange', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(render, 250);
+  });
+
+  // Fade the hero as the user scrolls past it, then let it scroll away
+  // normally with the page.
+  window.addEventListener('scroll', () => {
+    const past = window.scrollY > window.innerHeight * 0.4;
+    heroSection.classList.toggle('hero-leaving', past);
+  }, { passive: true });
+
+  if (cue) {
+    cue.addEventListener('click', () => {
+      const target = document.getElementById('app-content');
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+}
+
+// --------------------------------------------------------------------------
 // Bootstrap
 // --------------------------------------------------------------------------
 
@@ -434,6 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   setupEventListeners();
   renderAll();
+  initHeroSplash();
 });
 
 // --------------------------------------------------------------------------

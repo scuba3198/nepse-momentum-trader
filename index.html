@@ -21,6 +21,43 @@
   </script>
 </head>
 <body>
+  <!-- ============================================================
+       HERO SPLASH — first thing the user sees. Scroll (or the
+       prompt button) reveals the actual dashboard beneath it.
+       ============================================================ -->
+  <section class="hero-splash" id="hero-splash">
+    <div class="hero-ascii-field" id="hero-ascii-field" aria-hidden="true"></div>
+    <div class="hero-content">
+      <div class="hero-eyebrow">// NEPSE &middot; DISCRETIONARY MOMENTUM DESK</div>
+      <h1 class="hero-headline">
+        <span>TREND IS</span>
+        <span>THE ONLY</span>
+        <span>EDGE</span>
+      </h1>
+      <p class="hero-copy">
+        A rules-based cockpit for the Efficient Trader (ATR Momentum)
+        method &mdash; one macro gate, a Minervini-filtered shortlist,
+        ATR-sized entries and trailing stops, so every position on the
+        board earned its slot.
+      </p>
+      <div class="hero-meta">
+        <div class="hero-meta-item">
+          <span class="hero-meta-label">Method</span>
+          <span class="hero-meta-value">Trend Template + RS + VCP</span>
+        </div>
+        <div class="hero-meta-item">
+          <span class="hero-meta-label">Risk</span>
+          <span class="hero-meta-value">1% / trade &middot; 5% max exposure</span>
+        </div>
+      </div>
+    </div>
+    <button class="hero-scroll-cue" id="hero-scroll-cue" aria-label="Scroll to open the desk">
+      <span>Enter the Desk</span>
+      <i class="fa-solid fa-chevron-down"></i>
+    </button>
+  </section>
+
+  <div id="app-content">
   <div class="glow-container">
     <div class="glow-orb orb-1"></div>
     <div class="glow-orb orb-2"></div>
@@ -401,6 +438,8 @@
       </div>
     </div>
   </div>
+
+  </div><!-- /#app-content -->
 
   <script src="app.js"></script>
   <script>
