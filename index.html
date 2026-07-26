@@ -112,10 +112,10 @@
     <div class="card-header">
       <span class="step-num">00</span>
       <h2>Distribution Day Counter</h2>
-      <span class="tooltip" data-tooltip="A distribution day = index closes down on higher volume than the prior day, within the trailing ~25 trading days. 0-2 = Normal. 3-4 = Caution, be selective. 5+ = Under Distribution, reduce new buying. A Follow-Through Day (a strong up day, roughly +1.5% or more, on volume higher than the prior day) resets the count. This is a risk throttle, not a hard block — you decide how to act on it."><i class="fa-solid fa-circle-info"></i></span>
+      <span class="tooltip" data-tooltip="A distribution day = index closes down on higher volume than the prior day, within the trailing ~25 trading days. 0-2 = Normal. 3-4 = Caution, be selective (advisory only). 5+ = Under Distribution — new entries are hard-blocked until the count drops. A Follow-Through Day (a strong up day, roughly +1.5% or more, on volume higher than the prior day) resets the count. Existing pending orders and open positions are never affected — the gate only stops placing new day-orders."><i class="fa-solid fa-circle-info"></i></span>
     </div>
     <div class="card-body">
-      <p class="macro-desc">Upload the NEPSE index price CSV (adjusted) to compute the trailing distribution day count. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>.</p>
+      <p class="macro-desc">Upload the NEPSE index price CSV (adjusted) to compute the trailing distribution day count. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>. At 5+ distribution days ("Under Distribution"), new day-orders are hard-blocked until the count drops or a Follow-Through Day resets it.</p>
       <div style="display:flex; gap:0.5rem; margin-top:0.6rem; flex-wrap:wrap;">
         <button id="index-bars-upload-btn" class="btn btn-secondary">Upload CSV</button>
         <input type="file" id="index-bars-file-input" accept=".csv,text/csv" style="display:none;" />
@@ -131,7 +131,7 @@
   <!-- CAUTION BANNER (shown when distribution day count signals elevated risk) -->
   <div id="halt-banner" class="halt-banner" style="display:none;">
     <i class="fa-solid fa-triangle-exclamation"></i>
-    <strong id="halt-banner-text">UNDER DISTRIBUTION</strong> — Elevated distribution day count. Be selective with new entries; this does not block trading.
+    <strong id="halt-banner-text">UNDER DISTRIBUTION</strong> — <span id="halt-banner-desc">Elevated distribution day count. Be selective with new entries; this does not block trading.</span>
   </div>
 
   <main class="dashboard-grid">
@@ -232,6 +232,11 @@
           <div class="input-group liquidity-input-group">
             <label for="calc-liquidity">Recent Daily Turnover — optional, paste directly from NepseAlpha's rotation table</label>
             <textarea id="calc-liquidity" rows="2" placeholder="Paste cells directly, e.g. 197 21.90 Lac.	154 43.96 Lac.	104 77.45 Lac.	68 1.31 Cr."></textarea>
+          </div>
+
+          <!-- Distribution Day hard-gate warning -->
+          <div id="macro-blocked-warning" class="slots-full-warning" style="display:none;">
+            <i class="fa-solid fa-lock"></i> New entries are blocked — the market is Under Distribution (see Step 00). Manage existing positions/orders as normal.
           </div>
 
           <!-- Slots full warning -->

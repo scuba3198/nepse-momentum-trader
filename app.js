@@ -57,6 +57,7 @@ const elements = {
   distributionDaysList: document.getElementById('distribution-days-list'),
   haltBanner: document.getElementById('halt-banner'),
   haltBannerText: document.getElementById('halt-banner-text'),
+  haltBannerDesc: document.getElementById('halt-banner-desc'),
 
   // Screener Shortlist (Step 01)
   screenerBulkPaste: document.getElementById('screener-bulk-paste'),
@@ -82,6 +83,7 @@ const elements = {
   resLiquidityCheck: document.getElementById('res-liquidity-check'),
   executeTradeBtn: document.getElementById('execute-trade-btn'),
   slotsFullWarning: document.getElementById('slots-full-warning'),
+  macroBlockedWarning: document.getElementById('macro-blocked-warning'),
 
   // Pending GTC Orders
   pendingOrdersList: document.getElementById('pending-orders-list'),
@@ -753,9 +755,17 @@ function setupEventListeners() {
 
     if (!ticker || isNaN(entry) || isNaN(atr)) return;
 
-    // Note: the distribution day counter (Step 0) is an informational risk
-    // throttle, not a hard gate — it no longer blocks order placement here.
-    // Check the Distribution Day Counter panel and use judgment on sizing.
+    // Hard gate: block new entries outright while the trailing distribution-day
+    // count is severe ("Under Distribution"). Existing positions/orders are
+    // unaffected — this only stops committing new capital.
+    const macroGate = getMacroGateStatus();
+    if (macroGate.blocked) {
+      await appAlert(
+        `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).\n\n` +
+        `Manage existing positions/orders as normal — this only blocks placing new day-orders. It will unblock once the count drops, or a Follow-Through Day resets it.`
+      );
+      return;
+    }
 
     // Guard: portfolio slots (count both open positions AND outstanding GTC orders reserved against them)
     const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
@@ -1164,10 +1174,14 @@ function calculatePosition() {
 
   const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
   const slotsAvailable = slotsCommitted < PORTFOLIO_SLOTS;
-  const macroOk = true; // Distribution Day Counter (Step 0) is informational, not a hard gate
+  const macroGate = getMacroGateStatus();
+  const macroOk = !macroGate.blocked;
 
   // Show/hide slots-full warning
   elements.slotsFullWarning.style.display = (!slotsAvailable) ? 'flex' : 'none';
+
+  // Show/hide macro-blocked warning (hard gate — distribution count severe)
+  elements.macroBlockedWarning.style.display = macroGate.blocked ? 'flex' : 'none';
 
   if (!ticker || isNaN(entry) || isNaN(atr) || entry <= 0 || atr <= 0) {
     elements.resPlannedRisk.textContent = 'Rs. 0.00';
@@ -1522,12 +1536,26 @@ function renderScreenerTable() {
 // DISTRIBUTION_WINDOW_DAYS trading days. A Follow-Through Day (a strong up
 // day — DISTRIBUTION_FTD_MIN_PCT or more — on volume higher than the prior
 // bar) resets the window: only bars from the FTD onward are considered.
-// This is a risk throttle, not a hard gate — it never blocks execution.
+// This is a hard gate on NEW entries once severe ("Under Distribution"):
+// Place Day Order is blocked until the count drops back down. It does not
+// touch existing pending orders or open positions — those keep re-pricing,
+// filling, trailing, and exiting normally regardless of this count.
 // --------------------------------------------------------------------------
 const DISTRIBUTION_WINDOW_DAYS = 25;
 const DISTRIBUTION_CAUTION_THRESHOLD = 3;
 const DISTRIBUTION_SEVERE_THRESHOLD = 5;
 const DISTRIBUTION_FTD_MIN_PCT = 1.5;
+
+// Hard gate: once the trailing distribution-day count hits the severe
+// threshold ("Under Distribution"), new capital commitments are blocked
+// outright — placing a new GTC day-order is disabled until the count drops
+// back down. "Caution" (3-4) stays advisory only, same as before. Existing
+// pending orders keep re-pricing/filling and existing positions keep
+// trailing/exiting normally — the gate only stops *new* entries.
+function getMacroGateStatus() {
+  const { count, level } = computeDistributionDays(state.indexBars);
+  return { blocked: level === 'distribution', count, level };
+}
 
 // Splits one CSV line respecting double-quoted fields (which may contain
 // commas, e.g. thousand-separated numbers like "6,267,226,722.57").
@@ -1634,7 +1662,7 @@ function renderDistributionPanel() {
   const levelCopy = {
     normal: { icon: 'fa-circle-check', cls: 'clear', text: `${count} distribution day(s) in the trailing window — Normal. Full size, standard selectivity.` },
     caution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Caution. Be more selective on new entries.` },
-    distribution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Under Distribution. Consider reducing new buying.` }
+    distribution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Under Distribution. New entries are blocked.` }
   };
   const copy = levelCopy[level];
   elements.macroStatusText.innerHTML = `<i class="fa-solid ${copy.icon}"></i> ${copy.text}`;
@@ -1651,9 +1679,11 @@ function renderDistributionPanel() {
 
   if (level === 'distribution') {
     elements.haltBannerText.textContent = 'UNDER DISTRIBUTION';
+    elements.haltBannerDesc.textContent = 'Elevated distribution day count. New entries are blocked until this clears — manage existing positions/orders as normal.';
     elements.haltBanner.style.display = 'flex';
   } else if (level === 'caution') {
     elements.haltBannerText.textContent = 'CAUTION';
+    elements.haltBannerDesc.textContent = 'Elevated distribution day count. Be selective with new entries; this does not block trading.';
     elements.haltBanner.style.display = 'flex';
   } else {
     elements.haltBanner.style.display = 'none';
