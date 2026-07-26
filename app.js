@@ -527,17 +527,26 @@ function initHeroSplash() {
     resizeTimer = setTimeout(render, 250);
   });
 
-  // Fade the hero as the user scrolls past it, then let it scroll away
-  // normally with the page.
-  window.addEventListener('scroll', () => {
-    const past = window.scrollY > window.innerHeight * 0.4;
-    heroSection.classList.toggle('hero-leaving', past);
-  }, { passive: true });
+  // Lock the page on the splash until the desk is entered — no scrolling
+  // past it, only the button reveals what's underneath.
+  document.body.classList.add('hero-locked');
 
   if (cue) {
     cue.addEventListener('click', () => {
+      if (cue.disabled) return;
+      cue.disabled = true;
+
       const target = document.getElementById('app-content');
-      if (target) target.scrollIntoView({ behavior: 'smooth' });
+      heroSection.classList.add('hero-dismissed');
+      heroSection.setAttribute('aria-hidden', 'true');
+      if (target) target.classList.add('app-content-visible');
+      document.body.classList.remove('hero-locked');
+
+      // Once the fade/scale-out finishes, take the splash fully out of the
+      // way so it can't intercept clicks or show up in the tab order.
+      window.setTimeout(() => {
+        heroSection.style.display = 'none';
+      }, 750);
     });
   }
 }
