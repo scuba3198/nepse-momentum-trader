@@ -36,9 +36,9 @@
       </h1>
       <p class="hero-copy">
         A rules-based cockpit for the Efficient Trader (ATR Momentum)
-        method &mdash; one macro gate, a Minervini-filtered shortlist,
-        ATR-sized entries and trailing stops, so every position on the
-        board earned its slot.
+        method &mdash; a distribution day risk throttle, a Minervini-filtered
+        shortlist, ATR-sized entries and trailing stops, so every position on
+        the board earned its slot.
       </p>
       <div class="hero-meta">
         <div class="hero-meta-item">
@@ -107,35 +107,31 @@
     </div>
   </header>
 
-  <!-- STEP 0: BROAD MARKET MACRO FILTER — the single gate everything below depends on -->
+  <!-- STEP 0: DISTRIBUTION DAY COUNTER — market risk throttle (informational, not a hard gate) -->
   <div class="dashboard-card glass-panel macro-hero" id="macro-filter-section">
     <div class="card-header">
       <span class="step-num">00</span>
-      <h2>Broad Market Macro Filter</h2>
-      <span class="tooltip" data-tooltip="Check NepseAlpha Stage Analysis. Stage 2 (Uptrend) must have the highest stock count among all 4 stages before trading."><i class="fa-solid fa-circle-info"></i></span>
+      <h2>Distribution Day Counter</h2>
+      <span class="tooltip" data-tooltip="A distribution day = index closes down on higher volume than the prior day, within the trailing ~25 trading days. 0-2 = Normal. 3-4 = Caution, be selective. 5+ = Under Distribution, reduce new buying. A Follow-Through Day (a strong up day, roughly +1.5% or more, on volume higher than the prior day) resets the count. This is a risk throttle, not a hard block — you decide how to act on it."><i class="fa-solid fa-circle-info"></i></span>
     </div>
     <div class="card-body">
-      <p class="macro-desc">Check the NepseAlpha Stage Analysis chart. Is <strong>Stage 2 (Uptrend)</strong> the regime with the <em>highest stock count</em>?</p>
-      <div class="macro-toggle-group">
-        <button id="macro-yes-btn" class="macro-btn macro-btn-yes">
-          <i class="fa-solid fa-circle-check"></i>
-          Yes — Stage 2 is Leading
-        </button>
-        <button id="macro-no-btn" class="macro-btn macro-btn-no active-no">
-          <i class="fa-solid fa-circle-xmark"></i>
-          No — Do Not Trade
-        </button>
+      <p class="macro-desc">Upload the NEPSE index price CSV (adjusted) to compute the trailing distribution day count. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>.</p>
+      <div style="display:flex; gap:0.5rem; margin-top:0.6rem; flex-wrap:wrap;">
+        <button id="index-bars-upload-btn" class="btn btn-secondary">Upload CSV</button>
+        <input type="file" id="index-bars-file-input" accept=".csv,text/csv" style="display:none;" />
+        <button id="index-bars-clear-btn" class="btn btn-text">Clear History</button>
       </div>
-      <div id="macro-status-text" class="macro-status-text halted">
-        <i class="fa-solid fa-ban"></i> Market regime does not favour trading. Stay in cash.
+      <div id="macro-status-text" class="macro-status-text clear" style="margin-top: 0.9rem;">
+        <i class="fa-solid fa-circle-info"></i> Upload an index CSV to compute the distribution day count.
       </div>
+      <div id="distribution-days-list" style="margin-top: 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--paper-dim);"></div>
     </div>
   </div>
 
-  <!-- HALT BANNER (shown when Stage 2 is not dominant) -->
+  <!-- CAUTION BANNER (shown when distribution day count signals elevated risk) -->
   <div id="halt-banner" class="halt-banner" style="display:none;">
-    <i class="fa-solid fa-circle-xmark"></i>
-    <strong>TRADING HALTED</strong> — Stage 2 is not the dominant market regime. Remain 100% in cash. Do not open new positions until Stage 2 leads.
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <strong id="halt-banner-text">UNDER DISTRIBUTION</strong> — Elevated distribution day count. Be selective with new entries; this does not block trading.
   </div>
 
   <main class="dashboard-grid">
@@ -153,7 +149,7 @@
           <p class="macro-desc">Gate: Trend Template &amp; RS Score &ge; <span id="screener-threshold-label">75</span>. Showing top 5 passers, ranked by RS Score (VCP as tiebreaker).</p>
 
           <div class="input-group liquidity-input-group">
-            <label for="screener-bulk-paste">Paste rows from NepseAlpha's <strong>Minervini SEPA</strong> screener chart (Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS — copy directly from the table, one row per stock)</label>
+            <label for="screener-bulk-paste">Paste rows from NepseAlpha's <strong>Minervini SEPA</strong> <a href="https://nepsealpha.com/mark-minervini/chart?symbol=ADBL" target="_blank" rel="noopener">screener chart</a> (Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS — copy directly from the table, one row per stock)</label>
             <textarea id="screener-bulk-paste" rows="4" placeholder="ALBSL	73	100	25	84	59	71	99&#10;SBL	62	100	50	38	29	63	94"></textarea>
           </div>
           <div class="calculator-action">
@@ -398,7 +394,12 @@
     <p class="footer-credit">Built by <a href="https://github.com/scuba3198" target="_blank" rel="noopener noreferrer">Mumukshu D.C</a></p>
   </footer>
 
-  <!-- POPUPS / MODALS -->
+  </div><!-- /#app-content -->
+
+  <!-- POPUPS / MODALS — kept outside #app-content since it has a CSS
+       transform for its entrance animation, and transformed ancestors
+       break position:fixed containment (fixed elements inside would
+       position relative to that ancestor, not the real viewport). -->
   <!-- 1. Edit Account Value Modal -->
   <div class="modal-overlay" id="account-modal">
     <div class="modal-content glass-panel">
@@ -438,8 +439,6 @@
       </div>
     </div>
   </div>
-
-  </div><!-- /#app-content -->
 
   <script src="app.js"></script>
   <script>

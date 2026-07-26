@@ -30,7 +30,7 @@ let screenerFilterMode = 'top5'; // 'top5' | 'passing' | 'failing' | 'all'
 // Application State
 let state = {
   accountValue: 1000000.00,
-  stage2IsLeading: false,   // Step 0: Broad Market Macro Filter
+  indexBars: [],            // Step 0: Distribution Day Counter — { date, close, volume }, ascending
   pendingOrders: [],        // Step 4: GTC Limit Orders awaiting fill
   activeTrades: [],
   history: [],
@@ -49,11 +49,14 @@ const elements = {
   importBtn: document.getElementById('import-btn'),
   importFileInput: document.getElementById('import-file-input'),
 
-  // Macro Filter (Step 0)
-  macroYesBtn: document.getElementById('macro-yes-btn'),
-  macroNoBtn: document.getElementById('macro-no-btn'),
+  // Distribution Day Counter (Step 0)
+  indexBarsUploadBtn: document.getElementById('index-bars-upload-btn'),
+  indexBarsFileInput: document.getElementById('index-bars-file-input'),
+  indexBarsClearBtn: document.getElementById('index-bars-clear-btn'),
   macroStatusText: document.getElementById('macro-status-text'),
+  distributionDaysList: document.getElementById('distribution-days-list'),
   haltBanner: document.getElementById('halt-banner'),
+  haltBannerText: document.getElementById('halt-banner-text'),
 
   // Screener Shortlist (Step 01)
   screenerBulkPaste: document.getElementById('screener-bulk-paste'),
@@ -300,7 +303,10 @@ function importState(event) {
 
       // Merge into state with type guards
       state.accountValue = sanitizeNumber(importedState.accountValue, 1000000.00);
-      state.stage2IsLeading = importedState.stage2IsLeading === true;
+      state.indexBars = Array.isArray(importedState.indexBars)
+        ? importedState.indexBars.filter(b => b && typeof b.date === 'string' && isFinite(parseFloat(b.close)) && isFinite(parseFloat(b.volume)))
+            .map(b => ({ date: b.date, close: parseFloat(b.close), volume: parseFloat(b.volume) }))
+        : [];
 
       state.pendingOrders = Array.isArray(importedState.pendingOrders) ? importedState.pendingOrders : [];
       const droppedOrders = state.pendingOrders.filter(o => !isFinite(parseFloat(o?.plannedEntry)) || !isFinite(parseFloat(o?.atr)));
@@ -385,7 +391,10 @@ function loadState() {
       const parsed = JSON.parse(saved);
       if (parsed && typeof parsed === 'object') {
         state.accountValue = sanitizeNumber(parsed.accountValue, 1000000.00);
-        state.stage2IsLeading = parsed.stage2IsLeading === true;
+        state.indexBars = Array.isArray(parsed.indexBars)
+          ? parsed.indexBars.filter(b => b && typeof b.date === 'string' && isFinite(parseFloat(b.close)) && isFinite(parseFloat(b.volume)))
+              .map(b => ({ date: b.date, close: parseFloat(b.close), volume: parseFloat(b.volume) }))
+          : [];
 
         state.pendingOrders = Array.isArray(parsed.pendingOrders) ? parsed.pendingOrders : [];
         state.pendingOrders.forEach(o => {
@@ -629,31 +638,45 @@ function setupEventListeners() {
   elements.importBtn.addEventListener('click', () => elements.importFileInput.click());
   elements.importFileInput.addEventListener('change', importState);
 
-  // --- Macro Filter (Step 0) ---
-  elements.macroYesBtn.addEventListener('click', () => {
-    state.stage2IsLeading = true;
-    saveState();
-  });
-
-  elements.macroNoBtn.addEventListener('click', async () => {
-    state.stage2IsLeading = false;
-
-    // Step 4 cancellation rule #3: the Broad Market Macro Filter failing
-    // cancels any outstanding GTC orders. Shares already filled on an order
-    // (from partial fills over prior days) are kept as active trades since
-    // they're real, owned shares — only the unfilled remainder is dropped.
-    if (state.pendingOrders.length > 0) {
-      const tickers = state.pendingOrders.map(o => o.ticker);
-      state.pendingOrders.forEach(order => {
-        if (order.filledShares > 0) convertOrderToActiveTrade(order);
-      });
-      state.pendingOrders = [];
-      saveState();
-      await appAlert(`Macro filter failed. Pending GTC order(s) cancelled per strategy rules: ${tickers.join(', ')}`);
+  // --- Distribution Day Counter (Step 0) ---
+  function ingestIndexBarsText(text) {
+    const { bars, skippedCount } = parsePastedIndexBars(text);
+    if (bars.length === 0) {
+      appAlert('No valid index bars found. Expected either "Date Close Volume" per line, or a pasted/uploaded NepseAlpha CSV export.');
       return;
     }
-
+    const merged = new Map(state.indexBars.map(b => [b.date, b]));
+    bars.forEach(b => merged.set(b.date, b));
+    state.indexBars = Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
     saveState();
+    renderDistributionPanel();
+    if (skippedCount > 0) appAlert(`Added ${bars.length} bar(s). Skipped ${skippedCount} unparseable line(s).`);
+  }
+
+  elements.indexBarsUploadBtn.addEventListener('click', () => {
+    elements.indexBarsFileInput.click();
+  });
+
+  elements.indexBarsFileInput.addEventListener('change', async () => {
+    const file = elements.indexBarsFileInput.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      ingestIndexBarsText(text);
+    } catch (err) {
+      await appAlert('Could not read that file. Make sure it is a .csv file.');
+    } finally {
+      elements.indexBarsFileInput.value = '';
+    }
+  });
+
+  elements.indexBarsClearBtn.addEventListener('click', async () => {
+    if (state.indexBars.length === 0) return;
+    const ok = await appConfirm('Clear all stored index bar history? This cannot be undone.');
+    if (!ok) return;
+    state.indexBars = [];
+    saveState();
+    renderDistributionPanel();
   });
 
   // --- Screener Shortlist (Step 01) ---
@@ -692,7 +715,7 @@ function setupEventListeners() {
         localStorage.removeItem('nepse_efficient_trader_state');
         state = {
           accountValue: 1000000.00,
-          stage2IsLeading: false,
+          indexBars: [],
           pendingOrders: [],
           activeTrades: [],
           history: [],
@@ -730,11 +753,9 @@ function setupEventListeners() {
 
     if (!ticker || isNaN(entry) || isNaN(atr)) return;
 
-    // Guard: macro filter
-    if (!state.stage2IsLeading) {
-      await appAlert('Trading is HALTED. Stage 2 is not the dominant market regime. Enable the Macro Filter first.');
-      return;
-    }
+    // Note: the distribution day counter (Step 0) is an informational risk
+    // throttle, not a hard gate — it no longer blocks order placement here.
+    // Check the Distribution Day Counter panel and use judgment on sizing.
 
     // Guard: portfolio slots (count both open positions AND outstanding GTC orders reserved against them)
     const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
@@ -1143,7 +1164,7 @@ function calculatePosition() {
 
   const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
   const slotsAvailable = slotsCommitted < PORTFOLIO_SLOTS;
-  const macroOk = state.stage2IsLeading;
+  const macroOk = true; // Distribution Day Counter (Step 0) is informational, not a hard gate
 
   // Show/hide slots-full warning
   elements.slotsFullWarning.style.display = (!slotsAvailable) ? 'flex' : 'none';
@@ -1264,7 +1285,7 @@ function calculatePosition() {
 // --------------------------------------------------------------------------
 
 function renderAll() {
-  renderMacroFilter();
+  renderDistributionPanel();
   renderHeader();
   renderScreenerTable();
   renderPendingOrders();
@@ -1473,9 +1494,11 @@ function renderScreenerTable() {
         <td>${c.rs}</td>
         <td>${c.vcp}<span class="vcp-flag ${vcpFlag.cls}">${vcpFlag.label}</span></td>
         <td><span class="gate-badge ${passes ? 'pass' : 'fail'}">${passes ? 'PASS' : 'FAIL'}</span></td>
-        <td style="display:flex; gap:0.4rem; align-items:center; justify-content:flex-end;">
-          ${passes ? `<button class="screener-use-btn" data-ticker="${escapeHTML(c.ticker)}"><i class="fa-solid fa-arrow-right"></i> Use</button>` : ''}
-          <button class="screener-row-remove" data-remove="${escapeHTML(c.ticker)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+        <td>
+          <div style="display:flex; gap:0.4rem; align-items:center; justify-content:flex-end;">
+            ${passes ? `<button class="screener-use-btn" data-ticker="${escapeHTML(c.ticker)}"><i class="fa-solid fa-arrow-right"></i> Use</button>` : ''}
+            <button class="screener-row-remove" data-remove="${escapeHTML(c.ticker)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+          </div>
         </td>
       `;
       elements.screenerList.appendChild(tr);
@@ -1492,25 +1515,148 @@ function renderScreenerTable() {
   });
 }
 
-function renderMacroFilter() {
-  const leading = state.stage2IsLeading;
+// --------------------------------------------------------------------------
+// Distribution Day Counter (Step 0)
+// A distribution day = index closes lower than the prior bar's close, on
+// volume higher than the prior bar's volume. Counted over the trailing
+// DISTRIBUTION_WINDOW_DAYS trading days. A Follow-Through Day (a strong up
+// day — DISTRIBUTION_FTD_MIN_PCT or more — on volume higher than the prior
+// bar) resets the window: only bars from the FTD onward are considered.
+// This is a risk throttle, not a hard gate — it never blocks execution.
+// --------------------------------------------------------------------------
+const DISTRIBUTION_WINDOW_DAYS = 25;
+const DISTRIBUTION_CAUTION_THRESHOLD = 3;
+const DISTRIBUTION_SEVERE_THRESHOLD = 5;
+const DISTRIBUTION_FTD_MIN_PCT = 1.5;
 
-  if (leading) {
-    elements.macroYesBtn.classList.add('active-yes');
-    elements.macroYesBtn.classList.remove('active-no');
-    elements.macroNoBtn.classList.remove('active-no');
-    elements.macroNoBtn.classList.add('inactive-btn');
-    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-check"></i> Stage 2 is dominant. Market conditions favour trend-following trades.';
+// Splits one CSV line respecting double-quoted fields (which may contain
+// commas, e.g. thousand-separated numbers like "6,267,226,722.57").
+function splitCsvLine(line) {
+  const fields = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === ',' && !inQuotes) { fields.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  fields.push(cur);
+  return fields.map(f => f.trim());
+}
+
+// Accepts either:
+// 1) Manually typed lines: "2026-06-20  2145.30  18500000" (date, close,
+//    volume — tab or space separated).
+// 2) NepseAlpha's exported CSV, pasted as-is: header row
+//    Symbol,Date,Open,High,Low,Close,Percent Change,Volume,Turn Over —
+//    Date and Close are used directly; Volume (NepseAlpha exports total
+//    turnover in this column for the index) is used as the volume proxy.
+// Tolerant of extra whitespace and header rows; skips lines that don't
+// parse rather than throwing.
+function parsePastedIndexBars(text) {
+  const bars = [];
+  let skippedCount = 0;
+  text.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    if (trimmed.includes(',')) {
+      // NepseAlpha CSV row
+      const fields = splitCsvLine(trimmed);
+      if (fields.length < 8 || fields[1] === 'Date') { skippedCount++; return; } // header row
+      const date = fields[1];
+      const close = parseFloat(fields[5].replace(/[^0-9.\-]/g, ''));
+      const volume = parseFloat(fields[7].replace(/[^0-9.\-]/g, ''));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
+      bars.push({ date, close, volume });
+      return;
+    }
+
+    const parts = trimmed.split(/\t+|\s+/).filter(p => p !== '');
+    if (parts.length < 3) { skippedCount++; return; }
+    const [date, closeRaw, volumeRaw] = parts;
+    const close = parseFloat(closeRaw.replace(/[^0-9.\-]/g, ''));
+    const volume = parseFloat(volumeRaw.replace(/[^0-9.\-]/g, ''));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
+    bars.push({ date, close, volume });
+  });
+  return { bars, skippedCount };
+}
+
+// Returns { count, level, flagged: [{date, close, volume}], ftdDate }
+function computeDistributionDays(bars) {
+  if (!Array.isArray(bars) || bars.length < 2) {
+    return { count: 0, level: 'normal', flagged: [], ftdDate: null };
+  }
+
+  // Find the most recent Follow-Through Day; if present, only bars from
+  // that point forward are eligible to count toward the window.
+  let ftdIndex = -1;
+  for (let i = 1; i < bars.length; i++) {
+    const prior = bars[i - 1];
+    const cur = bars[i];
+    const pctChange = ((cur.close - prior.close) / prior.close) * 100;
+    if (pctChange >= DISTRIBUTION_FTD_MIN_PCT && cur.volume > prior.volume) {
+      ftdIndex = i;
+    }
+  }
+
+  const windowStart = Math.max(1, bars.length - DISTRIBUTION_WINDOW_DAYS, ftdIndex);
+  const flagged = [];
+  for (let i = windowStart; i < bars.length; i++) {
+    const prior = bars[i - 1];
+    const cur = bars[i];
+    if (cur.close < prior.close && cur.volume > prior.volume) {
+      flagged.push(cur);
+    }
+  }
+
+  const count = flagged.length;
+  let level = 'normal';
+  if (count >= DISTRIBUTION_SEVERE_THRESHOLD) level = 'distribution';
+  else if (count >= DISTRIBUTION_CAUTION_THRESHOLD) level = 'caution';
+
+  return { count, level, flagged, ftdDate: ftdIndex >= 0 ? bars[ftdIndex].date : null };
+}
+
+function renderDistributionPanel() {
+  const { count, level, flagged, ftdDate } = computeDistributionDays(state.indexBars);
+
+  if (state.indexBars.length === 0) {
+    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload an index CSV to compute the distribution day count.';
     elements.macroStatusText.className = 'macro-status-text clear';
+    elements.distributionDaysList.innerHTML = '';
     elements.haltBanner.style.display = 'none';
+    return;
+  }
+
+  const levelCopy = {
+    normal: { icon: 'fa-circle-check', cls: 'clear', text: `${count} distribution day(s) in the trailing window — Normal. Full size, standard selectivity.` },
+    caution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Caution. Be more selective on new entries.` },
+    distribution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Under Distribution. Consider reducing new buying.` }
+  };
+  const copy = levelCopy[level];
+  elements.macroStatusText.innerHTML = `<i class="fa-solid ${copy.icon}"></i> ${copy.text}`;
+  elements.macroStatusText.className = `macro-status-text ${copy.cls}`;
+
+  if (ftdDate) {
+    elements.distributionDaysList.innerHTML = `Follow-through day on ${escapeHTML(ftdDate)} reset the window.` +
+      (flagged.length > 0 ? ` Flagged: ${flagged.map(f => escapeHTML(f.date)).join(', ')}` : '');
+  } else if (flagged.length > 0) {
+    elements.distributionDaysList.innerHTML = `Flagged: ${flagged.map(f => escapeHTML(f.date)).join(', ')}`;
   } else {
-    elements.macroNoBtn.classList.add('active-no');
-    elements.macroNoBtn.classList.remove('inactive-btn');
-    elements.macroYesBtn.classList.remove('active-yes');
-    elements.macroYesBtn.classList.add('inactive-btn');
-    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-ban"></i> Market regime does not favour trading. Stay in cash.';
-    elements.macroStatusText.className = 'macro-status-text halted';
+    elements.distributionDaysList.innerHTML = '';
+  }
+
+  if (level === 'distribution') {
+    elements.haltBannerText.textContent = 'UNDER DISTRIBUTION';
     elements.haltBanner.style.display = 'flex';
+  } else if (level === 'caution') {
+    elements.haltBannerText.textContent = 'CAUTION';
+    elements.haltBanner.style.display = 'flex';
+  } else {
+    elements.haltBanner.style.display = 'none';
   }
 }
 
@@ -1937,10 +2083,10 @@ async function sellPositionByTicker(ticker) {
 
   saveState();
 
-  // Step 7: After exit, prompt to rescan for replacement if macro filter passes
+  // Step 7: After exit, prompt to rescan for replacement if a slot is free
   const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
   const slotsRemaining = PORTFOLIO_SLOTS - slotsCommitted;
-  if (slotsRemaining > 0 && state.stage2IsLeading) {
+  if (slotsRemaining > 0) {
     await appAlert(
       `Slot freed. You now have ${slotsRemaining} vacant slot${slotsRemaining > 1 ? 's' : ''}.\n\n` +
       `Per strategy rules: Rescan NepseAlpha Super Performance filter and fill the vacant slot(s) with the next highest-ranked qualifying stock.`
