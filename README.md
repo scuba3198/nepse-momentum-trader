@@ -10,19 +10,19 @@ A dark-mode-first (with light mode toggle), fully client-side web dashboard that
 
 The tracker enforces the mathematical rules of the **Efficient Trader Strategy** step by step:
 
-0. **Macro Filter**: Confirm Stage 2 (Uptrend) is the market regime with the highest stock count on NepseAlpha's Stage Analysis chart before opening new positions. Answering "No" halts trading and auto-cancels any outstanding GTC orders (unfilled shares are dropped; already-filled shares are kept as active trades).
-1. **Screener Shortlist**: Paste rows directly from NepseAlpha's Minervini SEPA screener table (`Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS`). A candidate must clear **both** the Trend Template score and RS score (≥ 75 each) to pass the gate. Passers are ranked by RS score (leadership strength) first, VCP Pattern Score as a tiebreaker — VCP alone never gates or ranks a stock, it's an entry-timing read (No Base Yet / Forming / Tight Base).
-2. **Planned Entry**: Enter the planned entry price for a shortlisted ticker.
-3. **Calculate Position Sizing**: Position size is computed so each position risks exactly **1% of account value** (up to 5% total across 5 portfolio slots), with a live capital-concentration check (flags positions eating >20%/>40% of account capital) and an optional liquidity check (position size vs. average daily turnover, pasted straight from NepseAlpha's rotation table).
-4. **Place GTC Limit Order**: Logged as a pending day order. NEPSE cancels day orders at session end, so each day you log the close and fresh ATR(14); the tool re-prices the order and its stop and resubmits automatically. It auto-cancels if unfilled after 5 trading day attempts, or the moment a day's close breaks that day's stop. Partial fills accumulate toward a running fill VWAP across multiple days.
-5. **Set Stop**: Once filled, the initial stop is set at the actual (VWAP) purchase price minus 2.5 × ATR(14).
-6. **Trailing Stop**: Updated daily; only ever raised, never lowered — `new stop = max(previous stop, highest close since entry − 2.5×ATR)`.
-7. **Exit**: An exit warning is triggered the moment the logged closing price drops below the trailing stop. Selling supports partial/multi-day exits with a running exit VWAP, and can prompt you to rescan for a replacement once a slot frees up (if the macro filter is still passing).
+0. **Distribution Day Counter**: Upload the NEPSE index's adjusted price CSV (exported from NepseAlpha) or paste bars manually. The app counts distribution days (index closes lower on higher volume than the prior bar) over the trailing 25 trading days, and a Follow-Through Day (a ≥1.5% up day on higher volume) resets the count. 0–2 days is Normal, 3–4 is Caution (advisory — new entries are still allowed, just be more selective), and **5+ is "Under Distribution," which hard-blocks placing new day-orders** until the count drops or a new Follow-Through Day resets it. This gate only stops new entries — it never touches pending orders already placed or open positions, which keep re-pricing, filling, trailing, and exiting normally.
+1. **Screener Shortlist**: Paste rows directly from NepseAlpha's Minervini SEPA screener table (`Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS`). A candidate must clear **both** the Trend Template score and RS score (≥ 75 each) to pass the gate. Passers are ranked by RS score (leadership strength) first, VCP Pattern Score as a tiebreaker. The default "Top 5" view applies a stricter bar on top of the gate — RS ≥ 90 and VCP ≥ 75 — matching the app's 5 portfolio slots; other filter views (All Passing / Failing / All) are available too. VCP alone never gates or ranks a stock on its own — it's an entry-timing read (No Base Yet / Forming / Tight Base).
+2. **Planned Entry & Position Sizing**: Enter a planned entry price and current ATR(14) for a shortlisted ticker. Position size is computed so each position risks exactly **1% of account value** (up to 5% total across 5 portfolio slots), with a live capital-concentration check (flags positions eating >20%/>40% of account capital), a minimum-lot-size warning below 10 shares, and an optional liquidity check (position size vs. average daily turnover, pasted straight from NepseAlpha's rotation table).
+3. **Place GTC Day Order**: Placing an order is blocked if all 5 portfolio slots (open positions + pending orders) are committed, if the ticker already has an order or position open, if there isn't enough cash for the sized position, or if the Distribution Day Counter is hard-gated (see Step 0). Otherwise it's logged as a pending day order. NEPSE cancels day orders at session end, so each trading day you log the close and fresh ATR(14); the tool re-prices the order and its stop and resubmits automatically (capping the re-priced size to available cash). It auto-cancels if unfilled after 5 daily attempts, or the moment a day's close breaks that day's current stop. Partial fills accumulate toward a running fill VWAP across multiple days.
+4. **Set Stop**: Once filled (fully or via the 5-attempt/stop-breach cutoff, converting whatever did fill), the initial stop is set at the actual VWAP purchase price minus 2.5 × ATR(14).
+5. **Trailing Stop**: Updated daily via the Daily Routine form; only ever raised, never lowered — `new stop = max(previous stop, highest close since entry − 2.5×ATR)`.
+6. **Exit**: An exit warning is triggered the moment the logged closing price drops below the trailing stop. Selling supports partial/multi-day exits with a running exit VWAP — the trailing stop stays active on whatever remains until the position is fully closed — and once a position is fully exited and a slot frees up, the app prompts you to rescan the screener for a replacement.
 
 ---
 
 ## Features
 
+- **Distribution Day Counter**: Upload a NepseAlpha index CSV export or paste bars manually (`Date Close Volume`, one per line); tolerant of header rows and extra whitespace. Tracks the trailing distribution-day count, detects Follow-Through Days, and hard-blocks new day-order placement once the count is severe.
 - **Account Capital Management**: Track account value and auto-derive every risk figure from it; account value can be adjusted at any time, including retroactively by realized P&L on trade close.
 - **Screener Shortlist**: Bulk-paste parser handles NepseAlpha's copy format (tab/space-separated rows, or one field per line), auto-skips header/malformed rows, and lets you filter the shortlist by Top 5 / All Passing / Failing / All.
 - **Position Sizing Calculator**: Computes stop, risk-per-share, suggested share count (rounded down, with a minimum-lot-size warning below 10 shares), required capital vs. available cash, capital concentration %, and an optional liquidity/ADV check — all live as you type.
@@ -86,54 +86,6 @@ No build step, no dependencies to install — it's plain HTML/CSS/JS plus FontAw
 ## Notes & Limitations
 
 - All prices, ATR values, and screener scores are entered manually — there is no live market data feed or broker integration. The app is a calculator and routine-tracker, not an execution engine.
+- The Distribution Day Counter reads whatever index CSV/bars you upload — it doesn't fetch NEPSE index data itself.
 - State lives entirely in one browser's `localStorage`; use Export/Import to move data between devices or back it up.
 - Portfolio is fixed at 5 slots and 1% risk per position (5% total); these are strategy constants, not user-configurable settings.
-
-
----
-
-## Installation & Running Locally
-
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/scuba3198/nepse-momentum-trader.git
-   cd nepse-momentum-trader
-   ```
-
-2. **Run a Local Web Server**:
-   You can run the dashboard using any local HTTP server. For example, using Python:
-   ```bash
-   python -m http.server 5000
-   ```
-   Or using Node.js:
-   ```bash
-   npx serve -l 5000
-   ```
-
-3. **Access the App**:
-   Open your browser and navigate to `http://localhost:5000`.
-
----
-
-## Key Calculations Implemented
-
-- **Max Risk per Position**:
-  $$\text{Max Risk} = \text{Account Value} \times 1\%$$
-
-- **Planned/Initial Stop**:
-  $$\text{Stop} = \text{Entry Price} - (2.5 \times \text{ATR}(14))$$
-
-- **Risk Per Share**:
-  $$\text{Risk Per Share} = \text{Entry Price} - \text{Stop}$$
-
-- **Position Size**:
-  $$\text{Position Size} = \left\lfloor \frac{\text{Max Risk}}{\text{Risk Per Share}} \right\rfloor$$
-
-- **Initial Stop (after fill)**:
-  $$\text{Initial Stop} = \text{Actual Average Purchase Price} - (2.5 \times \text{ATR}(14))$$
-
-- **Candidate Stop**:
-  $$\text{Candidate Stop} = \text{Highest Close Since Entry} - (2.5 \times \text{ATR}(14))$$
-
-- **Trailing Stop**:
-  $$\text{Trailing Stop} = \max(\text{Previous Stop}, \text{Candidate Stop})$$
