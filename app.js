@@ -17,6 +17,11 @@ const SCREENER_TT_THRESHOLD = 75;
 const SCREENER_RS_THRESHOLD = 75;
 const SCREENER_TOP_N = 5; // Portfolio has 5 slots — only show the top-ranked passers
 
+// Top 5 view is stricter than the base pass/fail gate above: a candidate
+// must pass the gate AND clear these higher bars to appear in Top 5.
+const SCREENER_TOP5_RS_THRESHOLD = 90;
+const SCREENER_TOP5_VCP_THRESHOLD = 75;
+
 // Which subset of screener candidates is currently displayed. This is a
 // transient view preference (not persisted to state/export) — it always
 // resets to 'top5' on reload, matching the app's default actionable view.
@@ -1427,10 +1432,13 @@ function renderScreenerTable() {
   let summaryText = '';
 
   if (screenerFilterMode === 'top5') {
-    shown = allPassers.slice(0, SCREENER_TOP_N);
-    const hiddenPasserCount = allPassers.length - shown.length;
+    const top5Eligible = allPassers.filter(c => c.rs >= SCREENER_TOP5_RS_THRESHOLD && c.vcp >= SCREENER_TOP5_VCP_THRESHOLD);
+    shown = top5Eligible.slice(0, SCREENER_TOP_N);
+    const hiddenEligibleCount = top5Eligible.length - shown.length;
+    const belowTop5Count = allPassers.length - top5Eligible.length;
     const parts = [];
-    if (hiddenPasserCount > 0) parts.push(`${hiddenPasserCount} more passing candidate(s) ranked below the top ${SCREENER_TOP_N}`);
+    if (hiddenEligibleCount > 0) parts.push(`${hiddenEligibleCount} more candidate(s) ranked below the top ${SCREENER_TOP_N}`);
+    if (belowTop5Count > 0) parts.push(`${belowTop5Count} passing candidate(s) below RS ${SCREENER_TOP5_RS_THRESHOLD} / VCP ${SCREENER_TOP5_VCP_THRESHOLD}`);
     if (allFailers.length > 0) parts.push(`${allFailers.length} candidate(s) failed the gate`);
     summaryText = parts.join(' · ');
   } else if (screenerFilterMode === 'passing') {
