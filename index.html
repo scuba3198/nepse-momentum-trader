@@ -234,6 +234,11 @@
             <textarea id="calc-liquidity" rows="2" placeholder="Paste cells directly, e.g. 197 21.90 Lac.	154 43.96 Lac.	104 77.45 Lac.	68 1.31 Cr."></textarea>
           </div>
 
+          <div class="input-group liquidity-input-group">
+            <label for="calc-reason">Reason for Entry — optional, saved with the trade and shown in history</label>
+            <textarea id="calc-reason" rows="2" placeholder="e.g. Tight VCP base, breaking out on volume above pivot; sector leading the Stage 2 group"></textarea>
+          </div>
+
           <!-- Distribution Day hard-gate warning -->
           <div id="macro-blocked-warning" class="slots-full-warning" style="display:none;">
             <i class="fa-solid fa-lock"></i> New entries are blocked — the market is Under Distribution (see Step 00). Manage existing positions/orders as normal.
@@ -385,11 +390,12 @@
                 <th>P&amp;L (NPR)</th>
                 <th>Return %</th>
                 <th>Status</th>
+                <th>Notes</th>
               </tr>
             </thead>
             <tbody id="history-list">
               <tr class="empty-row">
-                <td colspan="8">No historical trades logged yet.</td>
+                <td colspan="9">No historical trades logged yet.</td>
               </tr>
             </tbody>
           </table>

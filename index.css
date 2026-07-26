@@ -720,6 +720,34 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 
 .risk-badge-mini { font-family: var(--font-mono); font-size: 0.62rem; background: var(--halt-dim); border: 1px solid rgba(255,92,77,0.3); color: var(--halt); padding: 0.15rem 0.4rem; border-radius: var(--r-sm); font-weight: 700; display: inline-flex; align-items: center; gap: 0.2rem; }
 
+.trade-reason-note {
+  font-size: 0.74rem;
+  color: var(--paper-dim);
+  background: var(--tint-b);
+  border-left: 2px solid var(--line-strong);
+  padding: 0.45rem 0.65rem;
+  margin: 0.6rem 0 0;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.trade-reason-note i { font-size: 0.65rem; opacity: 0.55; margin-top: 0.15rem; flex-shrink: 0; }
+
+.history-notes-cell { max-width: 220px; }
+.history-note {
+  font-size: 0.7rem;
+  color: var(--paper-dim);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  cursor: help;
+}
+.history-note:not(:last-child) { margin-bottom: 0.3rem; }
+.history-note i { font-size: 0.6rem; opacity: 0.55; margin-top: 0.15rem; flex-shrink: 0; }
+
 .slots-full-warning { display: flex; align-items: center; gap: 0.6rem; background: var(--halt-dim); border: 1px solid rgba(255,92,77,0.3); color: var(--halt); font-family: var(--font-mono); font-size: 0.78rem; font-weight: 500; padding: 0.65rem 0.9rem; border-radius: var(--r-sm); margin-bottom: 1rem; }
 
 .header-action-btns { display: flex; align-items: center; gap: 0.2rem; margin-left: 0.5rem; }

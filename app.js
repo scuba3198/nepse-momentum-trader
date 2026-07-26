@@ -72,6 +72,7 @@ const elements = {
   calcEntry: document.getElementById('calc-entry'),
   calcAtr: document.getElementById('calc-atr'),
   calcLiquidity: document.getElementById('calc-liquidity'),
+  calcReason: document.getElementById('calc-reason'),
   resPlannedRisk: document.getElementById('res-planned-risk'),
   resInitialStop: document.getElementById('res-initial-stop'),
   resRiskPerShare: document.getElementById('res-risk-per-share'),
@@ -256,6 +257,13 @@ function escapeHTML(str) {
     .replace(/'/g, '&#39;');
 }
 
+// Short display copy for table cells — full text still lives in the title
+// attribute wherever this is used, so nothing is actually lost, just collapsed.
+function truncateText(str, max = 60) {
+  if (!str) return '';
+  return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
 // --------------------------------------------------------------------------
 // State Persistence
 // --------------------------------------------------------------------------
@@ -322,6 +330,7 @@ function importState(event) {
         o.filledValue = sanitizeNumber(o.filledValue, 0);
         o.daysWaiting = sanitizeNumber(o.daysWaiting, 0);
         o.accountValueAtEntry = sanitizeNumber(o.accountValueAtEntry, state.accountValue);
+        if (typeof o.entryReason !== 'string') o.entryReason = '';
       });
 
       state.activeTrades = Array.isArray(importedState.activeTrades) ? importedState.activeTrades : [];
@@ -338,6 +347,7 @@ function importState(event) {
         t.accountValueAtEntry = sanitizeNumber(t.accountValueAtEntry, state.accountValue);
         if (typeof t.soldShares !== 'number' || !isFinite(t.soldShares)) t.soldShares = 0;
         if (typeof t.soldValue !== 'number' || !isFinite(t.soldValue)) t.soldValue = 0;
+        if (typeof t.entryReason !== 'string') t.entryReason = '';
       });
 
       state.history = Array.isArray(importedState.history) ? importedState.history : [];
@@ -359,6 +369,7 @@ function importState(event) {
       elements.calcEntry.value = '';
       elements.calcAtr.value = '';
       elements.calcLiquidity.value = '';
+      elements.calcReason.value = '';
       elements.screenerBulkPaste.value = '';
       screenerFilterMode = 'top5';
       elements.routineSelect.value = '';
@@ -408,6 +419,7 @@ function loadState() {
           o.filledValue = sanitizeNumber(o.filledValue, 0);
           o.daysWaiting = sanitizeNumber(o.daysWaiting, 0);
           o.accountValueAtEntry = sanitizeNumber(o.accountValueAtEntry, state.accountValue);
+          if (typeof o.entryReason !== 'string') o.entryReason = '';
         });
 
         state.activeTrades = Array.isArray(parsed.activeTrades) ? parsed.activeTrades : [];
@@ -422,6 +434,7 @@ function loadState() {
           t.accountValueAtEntry = sanitizeNumber(t.accountValueAtEntry, state.accountValue);
           if (typeof t.soldShares !== 'number' || !isFinite(t.soldShares)) t.soldShares = 0;
           if (typeof t.soldValue !== 'number' || !isFinite(t.soldValue)) t.soldValue = 0;
+          if (typeof t.entryReason !== 'string') t.entryReason = '';
         });
 
         state.history = Array.isArray(parsed.history) ? parsed.history : [];
@@ -603,6 +616,7 @@ function convertOrderToActiveTrade(order) {
     // against that original sizing, even if this order took several days to fill.
     accountValueAtEntry: order.accountValueAtEntry != null ? order.accountValueAtEntry : state.accountValue,
     entryDate: new Date().toLocaleDateString(),
+    entryReason: order.entryReason || '',  // why the trade was taken — carried through to history on exit
     soldShares: 0,   // cumulative shares exited so far (for multi-day/illiquid exits)
     soldValue: 0     // cumulative Rs. received so far, for exit VWAP
   };
@@ -727,6 +741,7 @@ function setupEventListeners() {
         elements.calcEntry.value = '';
         elements.calcAtr.value = '';
         elements.calcLiquidity.value = '';
+        elements.calcReason.value = '';
         elements.screenerBulkPaste.value = '';
         screenerFilterMode = 'top5';
         elements.routineSelect.value = '';
@@ -808,6 +823,7 @@ function setupEventListeners() {
     }
 
     // Step 4: place the GTC limit order (does not fill immediately)
+    const entryReason = elements.calcReason.value.trim();
     state.pendingOrders.push({
       ticker,
       plannedEntry: entry,
@@ -818,7 +834,8 @@ function setupEventListeners() {
       filledValue: 0,        // cumulative price*shares filled so far, for VWAP
       daysWaiting: 0,
       placedDate: new Date().toLocaleDateString(),
-      accountValueAtEntry: state.accountValue  // account value used to size this order originally
+      accountValueAtEntry: state.accountValue,  // account value used to size this order originally
+      entryReason              // why the trade was taken — optional, carried through to the active trade and history
     });
 
     // Clear calculator
@@ -826,6 +843,7 @@ function setupEventListeners() {
     elements.calcEntry.value = '';
     elements.calcAtr.value = '';
     elements.calcLiquidity.value = '';
+    elements.calcReason.value = '';
     calculatePosition();
     saveState();
 
@@ -1774,6 +1792,11 @@ function renderPendingOrders() {
         </div>
       </div>
 
+      ${order.entryReason ? `
+      <p class="trade-reason-note" title="${escapeHTML(order.entryReason)}">
+        <i class="fa-solid fa-quote-left"></i> ${escapeHTML(order.entryReason)}
+      </p>` : ''}
+
       <p style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.5rem 0 0;">
         Day order — cancels at session end. Log today's close &amp; ATR below to re-price and resubmit for tomorrow.
       </p>
@@ -1913,6 +1936,11 @@ function renderActiveTrades() {
         </div>
       </div>
 
+      ${trade.entryReason ? `
+      <p class="trade-reason-note" title="${escapeHTML(trade.entryReason)}">
+        <i class="fa-solid fa-quote-left"></i> ${escapeHTML(trade.entryReason)}
+      </p>` : ''}
+
       <div class="trade-card-footer">
         <span class="trade-card-status">
           ${isExitRequired
@@ -1973,7 +2001,7 @@ function renderHistory() {
   if (state.history.length === 0) {
     elements.historyList.innerHTML = `
       <tr class="empty-row">
-        <td colspan="8">No historical trades logged yet.</td>
+        <td colspan="9">No historical trades logged yet.</td>
       </tr>
     `;
     return;
@@ -1983,6 +2011,14 @@ function renderHistory() {
     const tr = document.createElement('tr');
     const isGain = h.pnl >= 0;
     const riskPctStr = h.actualRiskPct != null ? `(${h.actualRiskPct.toFixed(2)}% of account)` : '';
+    const notesParts = [];
+    if (h.entryReason) {
+      notesParts.push(`<div class="history-note" title="${escapeHTML(h.entryReason)}"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${escapeHTML(truncateText(h.entryReason))}</div>`);
+    }
+    if (h.exitReason) {
+      notesParts.push(`<div class="history-note" title="${escapeHTML(h.exitReason)}"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${escapeHTML(truncateText(h.exitReason))}</div>`);
+    }
+    const notesHtml = notesParts.length > 0 ? notesParts.join('') : '<span class="text-muted">—</span>';
     tr.innerHTML = `
       <td><strong>${escapeHTML(h.ticker)}</strong></td>
       <td>${h.entryDate}<br><small class="text-muted">Rs. ${formatNPR(h.entryPrice)}</small></td>
@@ -1996,6 +2032,7 @@ function renderHistory() {
           ${isGain ? 'PROFIT' : 'LOSS'}
         </span>
       </td>
+      <td class="history-notes-cell">${notesHtml}</td>
     `;
     elements.historyList.appendChild(tr);
   });
@@ -2059,6 +2096,18 @@ async function sellPositionByTicker(ticker) {
     return;
   }
 
+  // Optional — cancelling this prompt does NOT abort the sale, it just skips
+  // the note. Keeps the running note if the position exits across multiple
+  // partial sells and only some of them get a reason typed in.
+  const exitReasonRaw = await appPrompt(
+    'Reason for exiting (optional):',
+    trade.exitReasonDraft || '',
+    'Log Sell Execution'
+  );
+  if (exitReasonRaw !== null && exitReasonRaw.trim() !== '') {
+    trade.exitReasonDraft = exitReasonRaw.trim();
+  }
+
   // Accumulate this partial sale into the trade's running exit VWAP
   trade.soldShares = (trade.soldShares || 0) + sharesSold;
   trade.soldValue = (trade.soldValue || 0) + (exitPrice * sharesSold);
@@ -2099,7 +2148,9 @@ async function sellPositionByTicker(ticker) {
     totalRisk,
     actualRiskPct,
     pnl,
-    returnPct
+    returnPct,
+    entryReason: trade.entryReason || '',
+    exitReason: trade.exitReasonDraft || ''
   };
 
   state.history.unshift(historyItem);
