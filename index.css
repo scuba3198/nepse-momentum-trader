@@ -780,8 +780,8 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 .data-table tbody tr:nth-child(4) { animation-delay: 0.11s; }
 .data-table tbody tr:nth-child(5) { animation-delay: 0.14s; }
 .data-table tbody tr:nth-child(n+6) { animation-delay: 0.16s; }
-.data-table tbody tr:not(.empty-row) td:first-child { transition: padding-left var(--ease), color var(--ease); }
-.data-table tbody tr:not(.empty-row):hover td:first-child { padding-left: 1.2rem; }
+.data-table tbody tr:not(.empty-row) td:first-child { transition: transform var(--ease), color var(--ease); }
+.data-table tbody tr:not(.empty-row):hover td:first-child { transform: translateX(0.5rem); }
 
 /* Gate badges draw their status icon in rather than appearing flat */
 @keyframes badge-in {
