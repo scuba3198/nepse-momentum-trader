@@ -1746,7 +1746,7 @@ function renderDistributionPanel() {
   const { count, level, flagged, ftdDate, state: marketState } = computeDistributionDays(state.indexBars);
 
   if (state.indexBars.length === 0) {
-    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload an index CSV to compute the distribution day count.';
+    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count.';
     elements.macroStatusText.className = 'macro-status-text clear';
     elements.distributionDaysList.innerHTML = '';
     elements.haltBanner.style.display = 'none';
