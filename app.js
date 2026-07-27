@@ -1559,10 +1559,12 @@ function renderScreenerTable() {
 // touch existing pending orders or open positions — those keep re-pricing,
 // filling, trailing, and exiting normally regardless of this count.
 // --------------------------------------------------------------------------
-const DISTRIBUTION_WINDOW_DAYS = 25;
+const DISTRIBUTION_WINDOW_DAYS = 25;          // sessions after which a distribution day expires
 const DISTRIBUTION_CAUTION_THRESHOLD = 3;
-const DISTRIBUTION_SEVERE_THRESHOLD = 5;
-const DISTRIBUTION_FTD_MIN_PCT = 1.5;
+const DISTRIBUTION_SEVERE_THRESHOLD = 5;       // hitting this also kicks the state machine back to 'correction'
+const DISTRIBUTION_FTD_MIN_PCT = 1.5;          // min % gain, on higher volume, to qualify as a Follow-Through Day
+const DISTRIBUTION_FTD_MIN_RALLY_DAY = 4;      // earliest day (of the rally attempt) an FTD can fire
+const DISTRIBUTION_RECOVERY_PCT = 6;           // a distribution day is removed early once price closes this much above it
 
 // Hard gate: once the trailing distribution-day count hits the severe
 // threshold ("Under Distribution"), new capital commitments are blocked
@@ -1630,44 +1632,118 @@ function parsePastedIndexBars(text) {
   return { bars, skippedCount };
 }
 
-// Returns { count, level, flagged: [{date, close, volume}], ftdDate }
+// --------------------------------------------------------------------------
+// Market state machine (Correction -> Rally Attempt -> Confirmed Uptrend)
+//
+//   correction  — no active rally attempt. Distribution days aren't counted
+//                 here (there's no confirmed trend to protect); the gate
+//                 itself is treated as blocked, since IBD discipline is to
+//                 not commit new capital until an FTD confirms a new uptrend.
+//   attempt     — day 1 was an up-close right after a down-close. The
+//                 attempt's low (the close of that prior down day) must
+//                 hold: closing below it invalidates the attempt and sends
+//                 the state back to 'correction' to wait for a new low.
+//                 Down days *within* the attempt are fine as long as the
+//                 low isn't undercut — an attempt does not require
+//                 consecutive up-closes.
+//   uptrend     — entered once an FTD fires: on day >= DISTRIBUTION_FTD_MIN_RALLY_DAY
+//                 of the attempt, a >= DISTRIBUTION_FTD_MIN_PCT gain on
+//                 higher volume than the prior bar. Only one FTD is
+//                 recognized per correction/attempt cycle. While in this
+//                 state, distribution days are tallied in a trailing
+//                 DISTRIBUTION_WINDOW_DAYS-session window; a flagged day
+//                 expires after that window OR early once price closes
+//                 DISTRIBUTION_RECOVERY_PCT% above it. Hitting the severe
+//                 threshold reverts the state to 'correction', so a new
+//                 FTD has to be earned again rather than firing on top of
+//                 an already-unhealthy tape.
+//
+// Returns { count, level, flagged: [{date, close, volume}], ftdDate, state }
+// --------------------------------------------------------------------------
 function computeDistributionDays(bars) {
   if (!Array.isArray(bars) || bars.length < 2) {
-    return { count: 0, level: 'normal', flagged: [], ftdDate: null };
+    return { count: 0, level: 'normal', flagged: [], ftdDate: null, state: 'uptrend' };
   }
 
-  // Find the most recent Follow-Through Day; if present, only bars from
-  // that point forward are eligible to count toward the window.
-  let ftdIndex = -1;
+  let marketState = 'correction';
+  let attemptLow = null;      // close of the day the current attempt must defend
+  let attemptStartIndex = -1; // index of day 1 of the current attempt
+  let lastFtdIndex = -1;
+  let activeDist = [];        // { date, close, volume, index } — distribution days since the last FTD, not yet expired/recovered
+
   for (let i = 1; i < bars.length; i++) {
     const prior = bars[i - 1];
     const cur = bars[i];
+
+    if (marketState === 'uptrend') {
+      // Expire distribution days older than the trailing window, or ones
+      // price has since recovered DISTRIBUTION_RECOVERY_PCT% above.
+      activeDist = activeDist.filter(d =>
+        (i - d.index) <= DISTRIBUTION_WINDOW_DAYS &&
+        cur.close < d.close * (1 + DISTRIBUTION_RECOVERY_PCT / 100)
+      );
+
+      if (cur.close < prior.close && cur.volume > prior.volume) {
+        activeDist.push({ date: cur.date, close: cur.close, volume: cur.volume, index: i });
+      }
+
+      if (activeDist.length >= DISTRIBUTION_SEVERE_THRESHOLD) {
+        // Market re-enters a correction — a fresh attempt + FTD has to be earned.
+        marketState = 'correction';
+        attemptLow = null;
+        attemptStartIndex = -1;
+      }
+      continue;
+    }
+
+    if (marketState === 'correction') {
+      if (cur.close > prior.close && prior.close < bars[i - 2 >= 0 ? i - 2 : 0].close) {
+        marketState = 'attempt';
+        attemptStartIndex = i;
+        attemptLow = prior.close;
+      }
+      continue;
+    }
+
+    // marketState === 'attempt'
+    if (cur.close < attemptLow) {
+      marketState = 'correction';
+      attemptStartIndex = -1;
+      attemptLow = null;
+      continue;
+    }
+    const rallyDay = i - attemptStartIndex + 1;
     const pctChange = ((cur.close - prior.close) / prior.close) * 100;
-    if (pctChange >= DISTRIBUTION_FTD_MIN_PCT && cur.volume > prior.volume) {
-      ftdIndex = i;
+    if (rallyDay >= DISTRIBUTION_FTD_MIN_RALLY_DAY && pctChange >= DISTRIBUTION_FTD_MIN_PCT && cur.volume > prior.volume) {
+      marketState = 'uptrend';
+      lastFtdIndex = i;
+      activeDist = [];
     }
   }
 
-  const windowStart = Math.max(1, bars.length - DISTRIBUTION_WINDOW_DAYS, ftdIndex);
-  const flagged = [];
-  for (let i = windowStart; i < bars.length; i++) {
-    const prior = bars[i - 1];
-    const cur = bars[i];
-    if (cur.close < prior.close && cur.volume > prior.volume) {
-      flagged.push(cur);
-    }
+  const count = activeDist.length;
+  let level;
+  if (marketState !== 'uptrend') {
+    level = 'distribution'; // no confirmed uptrend yet — treated as blocked, same as severe
+  } else if (count >= DISTRIBUTION_SEVERE_THRESHOLD) {
+    level = 'distribution';
+  } else if (count >= DISTRIBUTION_CAUTION_THRESHOLD) {
+    level = 'caution';
+  } else {
+    level = 'normal';
   }
 
-  const count = flagged.length;
-  let level = 'normal';
-  if (count >= DISTRIBUTION_SEVERE_THRESHOLD) level = 'distribution';
-  else if (count >= DISTRIBUTION_CAUTION_THRESHOLD) level = 'caution';
-
-  return { count, level, flagged, ftdDate: ftdIndex >= 0 ? bars[ftdIndex].date : null };
+  return {
+    count,
+    level,
+    flagged: activeDist.map(d => ({ date: d.date, close: d.close, volume: d.volume })),
+    ftdDate: lastFtdIndex >= 0 ? bars[lastFtdIndex].date : null,
+    state: marketState
+  };
 }
 
 function renderDistributionPanel() {
-  const { count, level, flagged, ftdDate } = computeDistributionDays(state.indexBars);
+  const { count, level, flagged, ftdDate, state: marketState } = computeDistributionDays(state.indexBars);
 
   if (state.indexBars.length === 0) {
     elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload an index CSV to compute the distribution day count.';
@@ -1677,18 +1753,25 @@ function renderDistributionPanel() {
     return;
   }
 
-  const levelCopy = {
-    normal: { icon: 'fa-circle-check', cls: 'clear', text: `${count} distribution day(s) in the trailing window — Normal. Full size, standard selectivity.` },
-    caution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Caution. Be more selective on new entries.` },
-    distribution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Under Distribution. New entries are blocked.` }
-  };
-  const copy = levelCopy[level];
+  let copy;
+  if (marketState === 'correction') {
+    copy = { icon: 'fa-triangle-exclamation', cls: 'halted', text: 'No confirmed uptrend — market is in a correction with no valid rally attempt yet. New entries are blocked.' };
+  } else if (marketState === 'attempt') {
+    copy = { icon: 'fa-triangle-exclamation', cls: 'halted', text: 'No confirmed uptrend — a rally attempt is underway but hasn\u2019t follow-throughed yet. New entries are blocked.' };
+  } else {
+    const levelCopy = {
+      normal: { icon: 'fa-circle-check', cls: 'clear', text: `${count} distribution day(s) in the trailing window — Normal. Full size, standard selectivity.` },
+      caution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Caution. Be more selective on new entries.` },
+      distribution: { icon: 'fa-triangle-exclamation', cls: 'halted', text: `${count} distribution day(s) in the trailing window — Under Distribution. New entries are blocked.` }
+    };
+    copy = levelCopy[level];
+  }
   elements.macroStatusText.innerHTML = `<i class="fa-solid ${copy.icon}"></i> ${copy.text}`;
   elements.macroStatusText.className = `macro-status-text ${copy.cls}`;
 
   if (ftdDate) {
-    elements.distributionDaysList.innerHTML = `Follow-through day on ${escapeHTML(ftdDate)} reset the window.` +
-      (flagged.length > 0 ? ` Flagged: ${flagged.map(f => escapeHTML(f.date)).join(', ')}` : '');
+    elements.distributionDaysList.innerHTML = `Follow-through day on ${escapeHTML(ftdDate)} confirmed the current uptrend.` +
+      (flagged.length > 0 ? ` Flagged since: ${flagged.map(f => escapeHTML(f.date)).join(', ')}` : '');
   } else if (flagged.length > 0) {
     elements.distributionDaysList.innerHTML = `Flagged: ${flagged.map(f => escapeHTML(f.date)).join(', ')}`;
   } else {
