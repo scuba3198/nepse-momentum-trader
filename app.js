@@ -2179,32 +2179,18 @@ function resolveSinceDate(trade) {
   return legacyParseDisplayDate(trade.lastUpdatedDate || trade.entryDate);
 }
 
-// NEPSE closes at 3:00 PM local time. Give a 30-minute buffer for the close
-// to settle before nagging about the day's data — otherwise this would flag
-// "today" as missed the moment it becomes today, hours before there's even
-// a closing price to log.
-const CATCHUP_READY_HOUR = 15;
-const CATCHUP_READY_MINUTE = 30;
-
-function isTodayReadyForCatchUp(now) {
-  return now.getHours() > CATCHUP_READY_HOUR ||
-    (now.getHours() === CATCHUP_READY_HOUR && now.getMinutes() >= CATCHUP_READY_MINUTE);
-}
-
 // Returns an array of date-only Date objects for every NEPSE trading day
-// strictly after `sinceDate`, up through the most recent trading day whose
-// close is already in and ready to log — today, if today is a trading day
-// and it's past market-close-plus-buffer, otherwise the closest earlier
-// trading day. Empty array means nothing is missed.
+// strictly after `sinceDate` and strictly BEFORE today — today's close/ATR
+// is current-day business that belongs in the normal Daily Routine form, not
+// the catch-up backlog, however late in the day it is. Only fully-closed
+// past trading days ever show up here. Empty array means nothing is missed.
 function getMissedTradingDays(sinceDate) {
   if (!sinceDate) return [];
   const sinceDay = toDateOnly(sinceDate);
 
-  const now = new Date();
-  let mostRecentTradingDay = toDateOnly(now);
-  if (!isTodayReadyForCatchUp(now)) {
-    mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
-  }
+  const today = toDateOnly(new Date());
+  let mostRecentTradingDay = new Date(today);
+  mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
   while (!isNepseTradingDay(mostRecentTradingDay)) {
     mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
   }
