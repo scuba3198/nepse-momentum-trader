@@ -618,7 +618,8 @@ function convertOrderToActiveTrade(order) {
     entryDate: new Date().toLocaleDateString(),
     entryReason: order.entryReason || '',  // why the trade was taken — carried through to history on exit
     soldShares: 0,   // cumulative shares exited so far (for multi-day/illiquid exits)
-    soldValue: 0     // cumulative Rs. received so far, for exit VWAP
+    soldValue: 0,    // cumulative Rs. received so far, for exit VWAP
+    updateLog: []    // Daily Routine history: { date, close, atr, trailingStop } per submission
   };
 
   state.activeTrades.push(newTrade);
@@ -1130,6 +1131,27 @@ function setupEventListeners() {
     trade.trailingStop = Math.max(trade.trailingStop, candidateStop);
     trade.lastAtr = todayAtr;
     trade.lastUpdatedDate = new Date().toLocaleDateString();
+
+    // Log this submission so the full update history is visible later, not
+    // just the most recent date. Older trades saved before this field
+    // existed won't have the array yet — create it on first use.
+    if (!Array.isArray(trade.updateLog)) trade.updateLog = [];
+    // If the routine was already run today for this stock, replace that
+    // entry instead of adding a duplicate — keeps the log to one entry per
+    // day even if you're correcting a earlier fat-fingered submission.
+    const todayStr = trade.lastUpdatedDate;
+    const existingTodayIdx = trade.updateLog.findIndex(e => e.date === todayStr);
+    const logEntry = {
+      date: todayStr,
+      close: todayClose,
+      atr: todayAtr,
+      trailingStop: trade.trailingStop
+    };
+    if (existingTodayIdx !== -1) {
+      trade.updateLog[existingTodayIdx] = logEntry;
+    } else {
+      trade.updateLog.push(logEntry);
+    }
 
     saveState();
 
@@ -2031,19 +2053,56 @@ function renderActiveTrades() {
             : `<span class="status-check"><i class="fa-solid fa-circle-check"></i> Holding Pattern</span>`
           }
         </span>
-        <button class="btn btn-secondary ${isExitRequired ? 'btn-danger-action' : ''}" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
-          <i class="fa-solid fa-arrow-right-from-bracket"></i> Sell Position
-        </button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary view-log-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-ticker="${escapeHTML(trade.ticker)}">
+            <i class="fa-solid fa-calendar-days"></i> Update Log${trade.updateLog && trade.updateLog.length ? ` (${trade.updateLog.length})` : ''}
+          </button>
+          <button class="btn btn-secondary ${isExitRequired ? 'btn-danger-action' : ''}" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i> Sell Position
+          </button>
+        </div>
       </div>
     `;
 
-    card.querySelector('button').addEventListener('click', (e) => {
+    card.querySelector('.view-log-btn').addEventListener('click', (e) => {
+      const t = e.currentTarget.getAttribute('data-ticker');
+      showUpdateLog(t);
+    });
+
+    card.querySelector('[data-index]').addEventListener('click', (e) => {
       const i = parseInt(e.currentTarget.getAttribute('data-index'), 10);
       sellPosition(i);
     });
 
     elements.portfolioList.appendChild(card);
   });
+}
+
+// Shows every day the Daily Routine was submitted for a given ticker,
+// most recent first, using the existing app dialog (its message element
+// preserves line breaks via white-space: pre-line).
+async function showUpdateLog(ticker) {
+  const trade = findActiveTradeByTicker(ticker);
+  if (!trade) return;
+
+  const log = Array.isArray(trade.updateLog) ? trade.updateLog : [];
+
+  if (log.length === 0) {
+    await appAlert(
+      trade.lastUpdatedDate
+        ? `No detailed log yet for ${ticker} — only a last-updated date is on record: ${trade.lastUpdatedDate}.`
+        : `No Daily Routine updates logged yet for ${ticker}.`
+    );
+    return;
+  }
+
+  const lines = log
+    .slice()
+    .reverse()
+    .map(e => `${e.date}  —  Close: Rs. ${formatNPR(e.close)}   ATR: ${e.atr.toFixed(2)}   Stop: Rs. ${formatNPR(e.trailingStop)}`)
+    .join('\n');
+
+  await appAlert(`${lines}`, `${ticker} — Update Log (${log.length})`);
 }
 
 function renderDailyRoutineDropdown() {
