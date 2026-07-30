@@ -774,6 +774,18 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 .app-header { position: relative; animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
 .macro-hero { animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) 0.1s both; }
 .halt-banner { animation: rise-in 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+
+.catchup-banner {
+  display: flex; align-items: center; gap: 0.7rem; padding: 0.85rem 1.1rem; margin: 0 0 1.2rem;
+  background: var(--caution-dim);
+  border: 1px solid rgba(181,115,10,0.4); border-radius: var(--r-md); color: var(--caution);
+  font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500;
+  animation: rise-in 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+.catchup-banner i { color: var(--caution); font-size: 1rem; flex-shrink: 0; }
+.catchup-banner span { flex: 1; }
+.catchup-banner-btn { flex-shrink: 0; padding: 0.45rem 0.9rem; font-size: 0.68rem; color: var(--caution); border-color: rgba(181,115,10,0.5); }
+.catchup-banner-btn:hover { background: rgba(181,115,10,0.12); }
 .dashboard-grid .grid-column:first-child { animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) 0.18s both; }
 .dashboard-grid .grid-column:last-child { animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) 0.26s both; }
 .dashboard-footer { animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) 0.34s both; }

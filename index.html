@@ -134,6 +134,13 @@
     <strong id="halt-banner-text">UNDER DISTRIBUTION</strong> — <span id="halt-banner-desc">Elevated distribution day count. Be selective with new entries; this does not block trading.</span>
   </div>
 
+  <!-- CATCH-UP BANNER (shown when one or more active trades have missed NEPSE trading days without a daily close/ATR log) -->
+  <div id="catchup-banner" class="catchup-banner" style="display:none;">
+    <i class="fa-solid fa-clock-rotate-left"></i>
+    <span id="catchup-banner-text"></span>
+    <button id="catchup-banner-btn" class="btn btn-secondary catchup-banner-btn">Catch Up Now</button>
+  </div>
+
   <main class="dashboard-grid">
     <!-- COLUMN 1: MACRO FILTER + SCANNER + CALCULATOR -->
     <section class="grid-column">

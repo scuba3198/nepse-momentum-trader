@@ -101,6 +101,11 @@ const elements = {
   routineAtr: document.getElementById('routine-atr'),
   routineSubmitBtn: document.getElementById('routine-submit-btn'),
 
+  // Catch-Up Reminder (missed daily updates)
+  catchupBanner: document.getElementById('catchup-banner'),
+  catchupBannerText: document.getElementById('catchup-banner-text'),
+  catchupBannerBtn: document.getElementById('catchup-banner-btn'),
+
   // History
   historyList: document.getElementById('history-list'),
 
@@ -616,6 +621,7 @@ function convertOrderToActiveTrade(order) {
     // against that original sizing, even if this order took several days to fill.
     accountValueAtEntry: order.accountValueAtEntry != null ? order.accountValueAtEntry : state.accountValue,
     entryDate: new Date().toLocaleDateString(),
+    entryISO: todayISODateString(), // robust, locale-independent — used for catch-up date math
     entryReason: order.entryReason || '',  // why the trade was taken — carried through to history on exit
     soldShares: 0,   // cumulative shares exited so far (for multi-day/illiquid exits)
     soldValue: 0,    // cumulative Rs. received so far, for exit VWAP
@@ -1073,6 +1079,9 @@ function setupEventListeners() {
     }
   });
 
+  // --- Daily Routine: Catch-Up ---
+  elements.catchupBannerBtn.addEventListener('click', runCatchUpFlow);
+
   // --- Daily Routine ---
   elements.routineSelect.addEventListener('change', () => {
     const ticker = elements.routineSelect.value;
@@ -1120,39 +1129,7 @@ function setupEventListeners() {
       return;
     }
 
-    // Step 6: Update highest close since entry
-    trade.highestClose = Math.max(trade.highestClose, todayClose);
-    trade.lastClose = todayClose;
-
-    // Candidate Stop = Highest Close Since Entry − (2.5 × ATR)
-    const candidateStop = trade.highestClose - (ATR_MULTIPLIER * todayAtr);
-
-    // Trailing Stop = MAX(Previous Stop, Candidate Stop) — never moves lower
-    trade.trailingStop = Math.max(trade.trailingStop, candidateStop);
-    trade.lastAtr = todayAtr;
-    trade.lastUpdatedDate = new Date().toLocaleDateString();
-
-    // Log this submission so the full update history is visible later, not
-    // just the most recent date. Older trades saved before this field
-    // existed won't have the array yet — create it on first use.
-    if (!Array.isArray(trade.updateLog)) trade.updateLog = [];
-    // If the routine was already run today for this stock, replace that
-    // entry instead of adding a duplicate — keeps the log to one entry per
-    // day even if you're correcting a earlier fat-fingered submission.
-    const todayStr = trade.lastUpdatedDate;
-    const existingTodayIdx = trade.updateLog.findIndex(e => e.date === todayStr);
-    const logEntry = {
-      date: todayStr,
-      close: todayClose,
-      atr: todayAtr,
-      trailingStop: trade.trailingStop
-    };
-    if (existingTodayIdx !== -1) {
-      trade.updateLog[existingTodayIdx] = logEntry;
-    } else {
-      trade.updateLog.push(logEntry);
-    }
-
+    applyDailyUpdate(trade, todayISODateString(), todayClose, todayAtr);
     saveState();
 
     // Reset form
@@ -1346,6 +1323,7 @@ function renderAll() {
   renderActiveTrades();
   renderDailyRoutineDropdown();
   renderHistory();
+  renderCatchupBanner();
   calculatePosition(); // Refresh calculator state/buttons
 }
 
@@ -2126,9 +2104,225 @@ function renderDailyRoutineDropdown() {
   state.activeTrades.forEach((trade) => {
     const opt = document.createElement('option');
     opt.value = trade.ticker;
-    opt.textContent = `${trade.ticker} (Stop: Rs. ${trade.trailingStop.toFixed(1)})`;
+    const missedCount = getMissedTradingDays(resolveSinceDate(trade)).length;
+    const behindTag = missedCount > 0 ? ` — ⚠ ${missedCount} day${missedCount > 1 ? 's' : ''} behind` : '';
+    opt.textContent = `${trade.ticker} (Stop: Rs. ${trade.trailingStop.toFixed(1)})${behindTag}`;
     elements.routineSelect.appendChild(opt);
   });
+}
+
+// --------------------------------------------------------------------------
+// Catch-Up Reminder: flags active trades whose close/ATR log has fallen
+// behind, and lets you backfill the missed NEPSE trading days.
+// NEPSE trades Monday-Friday, so Saturday/Sunday are never "missed" days.
+// --------------------------------------------------------------------------
+
+const NEPSE_TRADING_WEEKDAYS = [1, 2, 3, 4, 5]; // Mon=1 ... Fri=5 (Sat/Sun are non-trading)
+
+function isNepseTradingDay(date) {
+  return NEPSE_TRADING_WEEKDAYS.includes(date.getDay());
+}
+
+// Locale-independent "YYYY-MM-DD" for a Date, built from local Y/M/D fields
+// (not toISOString(), which converts to UTC and can land on the wrong day
+// near midnight). This is what gets stored for date math going forward.
+function toISODateString(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function todayISODateString() {
+  return toISODateString(new Date());
+}
+
+// Strict "YYYY-MM-DD" parser — built from the numeric fields directly rather
+// than handed to `new Date(str)`, so it can't be misread as day-first vs
+// month-first depending on the browser's locale. Returns null on anything
+// that isn't exactly that shape.
+function parseISODateOnly(str) {
+  if (typeof str !== 'string') return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function displayDateFromISO(iso) {
+  const d = parseISODateOnly(iso);
+  return d ? d.toLocaleDateString() : iso;
+}
+
+function toDateOnly(d) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+// Trades saved before this feature existed only have the locale-formatted
+// display date (e.g. "7/31/2026" or "31/7/2026" depending on the browser
+// that wrote it) and no ISO field. `new Date(str)` on that is a best-effort,
+// last-resort fallback only — it's not trusted for anything but old data,
+// and a misread here just means an old trade's catch-up count is off by a
+// bit, never a crash.
+function legacyParseDisplayDate(str) {
+  if (!str) return null;
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Resolves the date to measure "missed trading days" from: the robust ISO
+// field if this trade has one, otherwise a best-effort parse of whichever
+// legacy display-date field is available.
+function resolveSinceDate(trade) {
+  const isoDate = parseISODateOnly(trade.lastUpdatedISO || trade.entryISO);
+  if (isoDate) return isoDate;
+  return legacyParseDisplayDate(trade.lastUpdatedDate || trade.entryDate);
+}
+
+// Returns an array of date-only Date objects for every NEPSE trading day
+// strictly after `sinceDate`, up through the most recent trading day that
+// has already happened (today, if today is a trading day, otherwise the
+// closest earlier trading day). Empty array means nothing is missed.
+function getMissedTradingDays(sinceDate) {
+  if (!sinceDate) return [];
+  const sinceDay = toDateOnly(sinceDate);
+
+  let mostRecentTradingDay = toDateOnly(new Date());
+  while (!isNepseTradingDay(mostRecentTradingDay)) {
+    mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
+  }
+
+  if (mostRecentTradingDay <= sinceDay) return [];
+
+  const missed = [];
+  const cursor = new Date(sinceDay);
+  cursor.setDate(cursor.getDate() + 1);
+  while (cursor <= mostRecentTradingDay) {
+    if (isNepseTradingDay(cursor)) missed.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return missed;
+}
+
+// { trade, missedDays } for every active trade with at least one un-logged
+// NEPSE trading day since its last close/ATR entry (or since entry, for
+// trades that have never had a routine update logged).
+function getTradesNeedingCatchUp() {
+  return state.activeTrades
+    .map((trade) => ({
+      trade,
+      missedDays: getMissedTradingDays(resolveSinceDate(trade))
+    }))
+    .filter((item) => item.missedDays.length > 0);
+}
+
+// Applies one day's close/ATR to a trade — same trailing-stop math whether
+// it's run for today via the routine form, or backfilled for a missed day
+// via the catch-up flow. dateISO must be a "YYYY-MM-DD" string.
+function applyDailyUpdate(trade, dateISO, close, atr) {
+  // Step 6: Update highest close since entry
+  trade.highestClose = Math.max(trade.highestClose, close);
+  trade.lastClose = close;
+
+  // Candidate Stop = Highest Close Since Entry − (2.5 × ATR)
+  const candidateStop = trade.highestClose - (ATR_MULTIPLIER * atr);
+
+  // Trailing Stop = MAX(Previous Stop, Candidate Stop) — never moves lower
+  trade.trailingStop = Math.max(trade.trailingStop, candidateStop);
+  trade.lastAtr = atr;
+  trade.lastUpdatedISO = dateISO;
+  trade.lastUpdatedDate = displayDateFromISO(dateISO); // kept for display/back-compat
+
+  // Log this submission so the full update history is visible later, not
+  // just the most recent date. Older trades saved before this field existed
+  // won't have the array yet — create it on first use.
+  if (!Array.isArray(trade.updateLog)) trade.updateLog = [];
+  // Replace same-day entries instead of duplicating — keyed on the ISO date
+  // so this can't be fooled by locale display-string differences. Falls
+  // back to matching on the display string for older log entries that
+  // predate the ISO field.
+  const existingIdx = trade.updateLog.findIndex(e => (e.dateISO ? e.dateISO === dateISO : e.date === trade.lastUpdatedDate));
+  const logEntry = { date: trade.lastUpdatedDate, dateISO, close, atr, trailingStop: trade.trailingStop };
+  if (existingIdx !== -1) {
+    trade.updateLog[existingIdx] = logEntry;
+  } else {
+    trade.updateLog.push(logEntry);
+  }
+}
+
+function renderCatchupBanner() {
+  const items = getTradesNeedingCatchUp();
+  if (items.length === 0) {
+    elements.catchupBanner.style.display = 'none';
+    return;
+  }
+
+  const totalMissedDays = items.reduce((sum, i) => sum + i.missedDays.length, 0);
+  const maxMissedDays = Math.max(...items.map(i => i.missedDays.length));
+  const tickers = items.map(i => i.trade.ticker).join(', ');
+
+  elements.catchupBannerText.textContent =
+    `Daily update missed: ${items.length} trade${items.length > 1 ? 's' : ''} (${tickers}) ` +
+    `${maxMissedDays > 1 ? `up to ${maxMissedDays} trading days` : '1 trading day'} behind ` +
+    `(${totalMissedDays} closing price${totalMissedDays > 1 ? 's' : ''}/ATR${totalMissedDays > 1 ? 's' : ''} to fill).`;
+  elements.catchupBanner.style.display = 'flex';
+}
+
+// Walks through every trade with missed trading days, oldest missed day
+// first, prompting for that day's close and ATR and applying it with the
+// same math the normal Daily Routine submit uses. Cancelling any prompt
+// stops the whole catch-up (whatever was already logged stays saved).
+async function runCatchUpFlow() {
+  const items = getTradesNeedingCatchUp();
+  if (items.length === 0) {
+    await appAlert("No missed trading days — you're all caught up.");
+    return;
+  }
+
+  for (const { trade } of items) {
+    // Re-derive per trade (not per day) in case an earlier iteration in this
+    // same run already logged some of its days.
+    const ticker = trade.ticker;
+    let missedDays = getMissedTradingDays(resolveSinceDate(trade));
+
+    for (const day of missedDays) {
+      const t = findActiveTradeByTicker(ticker);
+      if (!t) break; // sold mid-catchup — nothing left to backfill for it
+
+      const dayISO = toISODateString(day);
+      const dayDisplay = day.toLocaleDateString();
+
+      const closeStr = await appPrompt(
+        `Catch-up for ${ticker} — ${dayDisplay}.\nClosing price (Rs.):`,
+        '',
+        'Catch Up: Missed Day'
+      );
+      if (closeStr === null) return; // cancelled — stop the whole catch-up
+      const close = parseFloat(closeStr);
+      if (isNaN(close) || close <= 0) {
+        await appAlert('Please enter a valid closing price. Catch-up stopped — run it again to resume.');
+        return;
+      }
+
+      const atrStr = await appPrompt(
+        `Catch-up for ${ticker} — ${dayDisplay}.\nATR (14) (Rs.):`,
+        '',
+        'Catch Up: Missed Day'
+      );
+      if (atrStr === null) return; // cancelled
+      const atr = parseFloat(atrStr);
+      if (isNaN(atr) || atr <= 0 || atr >= close) {
+        await appAlert(`ATR must be a valid number less than the close (Rs. ${close.toFixed(2)}). Catch-up stopped — run it again to resume.`);
+        return;
+      }
+
+      applyDailyUpdate(t, dayISO, close, atr);
+      saveState();
+      renderAll();
+    }
+  }
+
+  await appAlert("All missed trading days have been logged. You're caught up.");
 }
 
 // Look up an active trade by ticker rather than positional index, since the
