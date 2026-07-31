@@ -477,6 +477,7 @@ body {
 
 .input-group { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.1rem; width: 100%; }
 .input-group label { font-family: var(--font-mono); font-size: 0.64rem; color: var(--paper-dim); font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+.form-help { color: var(--paper-dim); font-size: 0.7rem; line-height: 1.45; }
 .input-wrapper { position: relative; display: flex; align-items: center; width: 100%; }
 .input-prefix, .input-suffix { position: absolute; color: var(--paper-faint); font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; pointer-events: none; }
 .input-prefix { left: 0.85rem; }

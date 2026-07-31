@@ -115,14 +115,22 @@
       <span class="tooltip" data-tooltip="A distribution day = index closes down on higher volume than the prior day. The counter runs a market-state machine (Correction -> Rally Attempt -> Confirmed Uptrend) starting from the first bar you upload, so it needs enough history to actually see a low and a real rally attempt form — upload at least 6 months of data, starting before the last major swing low, or it may misread an ongoing uptrend as unconfirmed. 0-2 = Normal. 3-4 = Caution, be selective (advisory only). 5+ = Under Distribution — new entries are hard-blocked until the count drops. A Follow-Through Day (day 4+ of a rally attempt, roughly +1.5% or more on volume higher than the prior day, without undercutting the attempt's low) confirms a new uptrend. Existing pending orders and open positions are never affected — the gate only stops placing new day-orders."><i class="fa-solid fa-circle-info"></i></span>
     </div>
     <div class="card-body">
-      <p class="macro-desc">Upload <strong>at least 6 months</strong> of NEPSE index price CSV (adjusted) — starting before the last major swing low — to compute the distribution day count. Uploading a short window (e.g. 2-3 months) risks starting mid-cycle, which can make a real uptrend look unconfirmed. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>. At 5+ distribution days ("Under Distribution"), new day-orders are hard-blocked until the count drops or a Follow-Through Day confirms a new uptrend.</p>
+      <p class="macro-desc">Upload <strong>at least 6 months</strong> of NEPSE index price CSV (adjusted) — starting before the last major swing low — to compute the distribution day count. Fewer than two valid sessions hard-blocks new entries because no market state can be confirmed. Uploading a short window (e.g. 2-3 months) risks starting mid-cycle, which can make a real uptrend look unconfirmed. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>. At 5+ distribution days ("Under Distribution"), new day-orders are hard-blocked until the count drops or a Follow-Through Day confirms a new uptrend.</p>
       <div style="display:flex; gap:0.5rem; margin-top:0.6rem; flex-wrap:wrap;">
         <button id="index-bars-upload-btn" class="btn btn-secondary">Upload CSV</button>
         <input type="file" id="index-bars-file-input" accept=".csv,text/csv" style="display:none;" />
         <button id="index-bars-clear-btn" class="btn btn-text">Clear History</button>
       </div>
-      <div id="macro-status-text" class="macro-status-text clear" style="margin-top: 0.9rem;">
-        <i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count.
+      <div class="input-group" style="margin-top:0.8rem;">
+        <label for="session-closures-input">NEPSE closed sessions (YYYY-MM-DD)</label>
+        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+          <input id="session-closures-input" type="text" placeholder="2026-10-21, 2026-10-22" style="flex:1; min-width:16rem;" />
+          <button id="session-closures-save-btn" type="button" class="btn btn-secondary">Save Calendar</button>
+        </div>
+        <small class="form-help">Weekends are automatic. Add public holidays and any ad-hoc closures from the latest NEPSE session notice; these dates are included in pending-order and catch-up checks.</small>
+      </div>
+      <div id="macro-status-text" class="macro-status-text halted" style="margin-top: 0.9rem;">
+        <i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count. New entries are blocked until enough history is available.
       </div>
       <div id="distribution-days-list" style="margin-top: 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--paper-dim);"></div>
     </div>

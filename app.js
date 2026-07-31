@@ -4,6 +4,7 @@
 
 // Strategy Constants
 const PORTFOLIO_SLOTS = 5;
+const DEFAULT_ACCOUNT_VALUE = 1000000.00;
 const RISK_PER_POSITION_PCT = 0.01;                                        // 1% of account value, per position
 const TOTAL_PORTFOLIO_RISK_PCT = RISK_PER_POSITION_PCT * PORTFOLIO_SLOTS;  // 5% with all slots filled
 const ATR_MULTIPLIER = 2.5;
@@ -29,8 +30,14 @@ let screenerFilterMode = 'top5'; // 'top5' | 'passing' | 'failing' | 'all'
 
 // Application State
 let state = {
-  accountValue: 1000000.00,
+  accountValue: DEFAULT_ACCOUNT_VALUE,
+  // Actual settled cash.  Account value is the equity/risk-sizing base;
+  // this ledger changes when a fill or sale actually moves cash.  Pending
+  // unfilled shares are reserved separately by getAvailableCash().
+  cashBalance: DEFAULT_ACCOUNT_VALUE,
+  realizedPnl: 0,
   indexBars: [],            // Step 0: Distribution Day Counter — { date, close, volume }, ascending
+  closedDates: [],          // User-maintained exchange closures/holidays, YYYY-MM-DD
   pendingOrders: [],        // Step 4: GTC Limit Orders awaiting fill
   activeTrades: [],
   history: [],
@@ -53,6 +60,8 @@ const elements = {
   indexBarsUploadBtn: document.getElementById('index-bars-upload-btn'),
   indexBarsFileInput: document.getElementById('index-bars-file-input'),
   indexBarsClearBtn: document.getElementById('index-bars-clear-btn'),
+  sessionClosuresInput: document.getElementById('session-closures-input'),
+  sessionClosuresSaveBtn: document.getElementById('session-closures-save-btn'),
   macroStatusText: document.getElementById('macro-status-text'),
   distributionDaysList: document.getElementById('distribution-days-list'),
   haltBanner: document.getElementById('halt-banner'),
@@ -222,6 +231,9 @@ function appPrompt(message, defaultValue = '', title = 'Input Needed') {
 
 // Total capital currently committed: open positions (at cost) + pending orders
 // (already-filled portion at fill VWAP, plus the still-unfilled portion at planned entry price).
+// This is a gross commitment metric.  Cash availability is calculated from
+// the actual cash ledger below so partial-sale proceeds/losses cannot be
+// hidden by reducing an active position's cost basis.
 function getCapitalDeployed() {
   const activeCapital = state.activeTrades.reduce(
     (sum, t) => sum + (t.actualPrice * t.shares), 0
@@ -234,6 +246,39 @@ function getCapitalDeployed() {
     return sum + filledCost + unfilledCost;
   }, 0);
   return activeCapital + pendingCapital;
+}
+
+function getPendingReservedCash(excludeOrder = null) {
+  return state.pendingOrders.reduce((sum, order) => {
+    if (order === excludeOrder) return sum;
+    const filledShares = Math.max(0, Math.floor(sanitizeNumber(order.filledShares, 0)));
+    const shares = Math.max(filledShares, Math.floor(sanitizeNumber(order.shares, 0)));
+    const unfilledShares = shares - filledShares;
+    const plannedEntry = Math.max(0, sanitizeNumber(order.plannedEntry, 0));
+    return sum + (unfilledShares * plannedEntry);
+  }, 0);
+}
+
+// Cash already spent on fills is removed from cashBalance; only unfilled
+// pending quantities need to be reserved here.
+function getAvailableCash(excludeOrder = null) {
+  const cashBalance = isFinite(state.cashBalance)
+    ? state.cashBalance
+    : state.accountValue;
+  return Math.max(0, cashBalance - getPendingReservedCash(excludeOrder));
+}
+
+function adjustCashBalance(delta) {
+  const amount = sanitizeNumber(delta, 0);
+  state.cashBalance = sanitizeNumber(state.cashBalance, state.accountValue) + amount;
+}
+
+function recordRealizedPnl(pnl) {
+  const realized = sanitizeNumber(pnl, 0);
+  state.realizedPnl = sanitizeNumber(state.realizedPnl, 0) + realized;
+  // Account value is the equity base used for future risk sizing.  Apply each
+  // tranche's realized P&L exactly once, including partial exits.
+  state.accountValue = Math.max(0, sanitizeNumber(state.accountValue, DEFAULT_ACCOUNT_VALUE) + realized);
 }
 
 // Returns a finite number, falling back to `fallback` for anything that
@@ -273,10 +318,293 @@ function truncateText(str, max = 60) {
 // State Persistence
 // --------------------------------------------------------------------------
 
+function normalizeText(value, fallback = '', maxLength = 2000) {
+  return typeof value === 'string' ? value.slice(0, maxLength) : fallback;
+}
+
+function normalizeTicker(value) {
+  const ticker = normalizeText(value, '').trim().toUpperCase();
+  return ticker === '' ? null : ticker.slice(0, 30);
+}
+
+function validISODate(value) {
+  return typeof value === 'string' && parseISODateOnly(value) ? value : null;
+}
+
+function isoFromLegacyDisplayDate(value) {
+  const date = legacyParseDisplayDate(value);
+  return date ? toISODateString(date) : null;
+}
+
+function normalizeDateFields(rawISO, rawDisplay) {
+  const iso = validISODate(rawISO) || isoFromLegacyDisplayDate(rawDisplay);
+  const display = normalizeText(rawDisplay, '').trim() || (iso ? displayDateFromISO(iso) : '');
+  return { iso, display };
+}
+
+function normalizeIndexBars(rawBars) {
+  const byDate = new Map();
+  if (!Array.isArray(rawBars)) return [];
+
+  rawBars.forEach((bar) => {
+    if (!bar || !validISODate(bar.date)) return;
+    const close = parseFloat(bar.close);
+    const volume = parseFloat(bar.volume);
+    if (!isFinite(close) || close <= 0 || !isFinite(volume) || volume < 0) return;
+    byDate.set(bar.date, { date: bar.date, close, volume });
+  });
+
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function normalizePendingOrder(rawOrder, accountValue) {
+  if (!rawOrder || typeof rawOrder !== 'object' || Array.isArray(rawOrder)) return null;
+
+  const ticker = normalizeTicker(rawOrder.ticker);
+  const plannedEntry = parseFloat(rawOrder.plannedEntry);
+  const atr = parseFloat(rawOrder.atr);
+  const shares = Math.floor(parseFloat(rawOrder.shares));
+  if (!ticker || !isFinite(plannedEntry) || plannedEntry <= 0 || !isFinite(atr) || atr <= 0 || !isFinite(shares) || shares <= 0) {
+    return null;
+  }
+
+  const filledSharesRaw = parseFloat(rawOrder.filledShares);
+  const filledShares = isFinite(filledSharesRaw)
+    ? Math.min(shares, Math.max(0, Math.floor(filledSharesRaw)))
+    : 0;
+  const filledValueRaw = parseFloat(rawOrder.filledValue);
+  const filledValue = isFinite(filledValueRaw) && filledValueRaw >= 0 ? filledValueRaw : 0;
+  if (filledShares > 0 && filledValue <= 0) return null;
+
+  const fallbackStop = plannedEntry - (ATR_MULTIPLIER * atr);
+  const plannedStopRaw = parseFloat(rawOrder.plannedStop);
+  const plannedStop = isFinite(plannedStopRaw) && plannedStopRaw > 0 ? plannedStopRaw : fallbackStop;
+  if (!isFinite(plannedStop) || plannedStop <= 0) return null;
+
+  const daysWaitingRaw = parseFloat(rawOrder.daysWaiting);
+  const daysWaiting = isFinite(daysWaitingRaw)
+    ? Math.min(MAX_DAY_ORDER_ATTEMPTS, Math.max(0, Math.floor(daysWaitingRaw)))
+    : 0;
+  const accountValueAtEntry = parseFloat(rawOrder.accountValueAtEntry);
+
+  const placed = normalizeDateFields(
+    rawOrder.placedISO || rawOrder.placedDateISO,
+    rawOrder.placedDate
+  );
+  const firstFill = normalizeDateFields(
+    rawOrder.firstFillISO || rawOrder.fillDateISO || rawOrder.filledDateISO,
+    rawOrder.firstFillDate || rawOrder.fillDate || rawOrder.filledDate
+  );
+  const lastLogged = normalizeDateFields(
+    rawOrder.lastLoggedISO || rawOrder.lastLoggedDateISO,
+    rawOrder.lastLoggedDate
+  );
+
+  const fillLog = Array.isArray(rawOrder.fillLog)
+    ? rawOrder.fillLog
+        .filter(fill => fill && typeof fill === 'object')
+        .map(fill => {
+          const dates = normalizeDateFields(fill.dateISO, fill.date);
+          const fillShares = Math.floor(parseFloat(fill.shares));
+          const fillPrice = parseFloat(fill.price);
+          if (!dates.iso || !isFinite(fillShares) || fillShares <= 0 || !isFinite(fillPrice) || fillPrice <= 0) return null;
+          return { dateISO: dates.iso, date: dates.display, shares: fillShares, price: fillPrice };
+        })
+        .filter(Boolean)
+    : [];
+
+  const derivedFirstFill = firstFill.iso
+    ? firstFill
+    : fillLog.length > 0
+      ? { iso: fillLog[0].dateISO, display: fillLog[0].date }
+      : { iso: null, display: '' };
+
+  return {
+    ticker,
+    plannedEntry,
+    atr,
+    plannedStop,
+    shares,
+    filledShares,
+    filledValue: filledShares > 0 ? filledValue : 0,
+    daysWaiting,
+    placedDate: placed.display,
+    placedISO: placed.iso,
+    firstFillDate: derivedFirstFill.display,
+    firstFillISO: derivedFirstFill.iso,
+    fillLog,
+    lastLoggedDate: lastLogged.display,
+    lastLoggedISO: lastLogged.iso,
+    accountValueAtEntry: isFinite(accountValueAtEntry) && accountValueAtEntry > 0 ? accountValueAtEntry : accountValue,
+    entryReason: normalizeText(rawOrder.entryReason, '').trim()
+  };
+}
+
+function normalizeActiveTrade(rawTrade, accountValue) {
+  if (!rawTrade || typeof rawTrade !== 'object' || Array.isArray(rawTrade)) return null;
+
+  const ticker = normalizeTicker(rawTrade.ticker);
+  const actualPrice = parseFloat(rawTrade.actualPrice);
+  const shares = Math.floor(parseFloat(rawTrade.shares));
+  if (!ticker || !isFinite(actualPrice) || actualPrice <= 0 || !isFinite(shares) || shares <= 0) return null;
+
+  const initialAtrRaw = parseFloat(rawTrade.initialAtr);
+  const initialAtr = isFinite(initialAtrRaw) && initialAtrRaw > 0 ? initialAtrRaw : 0;
+  const initialStopFallback = actualPrice - (ATR_MULTIPLIER * initialAtr);
+  const initialStopRaw = parseFloat(rawTrade.initialStop);
+  const trailingStopRaw = parseFloat(rawTrade.trailingStop);
+  const highestCloseRaw = parseFloat(rawTrade.highestClose);
+  const lastCloseRaw = parseFloat(rawTrade.lastClose);
+  const soldSharesRaw = parseFloat(rawTrade.soldShares);
+  const soldValueRaw = parseFloat(rawTrade.soldValue);
+
+  const entry = normalizeDateFields(rawTrade.entryISO, rawTrade.entryDate);
+  const lastUpdated = normalizeDateFields(rawTrade.lastUpdatedISO, rawTrade.lastUpdatedDate);
+  const updateLog = Array.isArray(rawTrade.updateLog)
+    ? rawTrade.updateLog
+        .filter(entryRaw => entryRaw && typeof entryRaw === 'object')
+        .map(entryRaw => {
+          const dates = normalizeDateFields(entryRaw.dateISO, entryRaw.date);
+          const close = parseFloat(entryRaw.close);
+          const atr = parseFloat(entryRaw.atr);
+          const trailingStop = parseFloat(entryRaw.trailingStop);
+          if (!dates.iso || !isFinite(close) || close <= 0 || !isFinite(atr) || atr <= 0 || !isFinite(trailingStop)) return null;
+          return { dateISO: dates.iso, date: dates.display, close, atr, trailingStop };
+        })
+        .filter(Boolean)
+    : [];
+
+  return {
+    ticker,
+    plannedEntry: isFinite(parseFloat(rawTrade.plannedEntry)) ? parseFloat(rawTrade.plannedEntry) : actualPrice,
+    actualPrice,
+    shares,
+    initialAtr,
+    initialStop: isFinite(initialStopRaw) ? initialStopRaw : initialStopFallback,
+    trailingStop: isFinite(trailingStopRaw) ? trailingStopRaw : (isFinite(initialStopRaw) ? initialStopRaw : initialStopFallback),
+    highestClose: isFinite(highestCloseRaw) ? highestCloseRaw : actualPrice,
+    lastClose: isFinite(lastCloseRaw) ? lastCloseRaw : actualPrice,
+    lastAtr: isFinite(parseFloat(rawTrade.lastAtr)) && parseFloat(rawTrade.lastAtr) > 0 ? parseFloat(rawTrade.lastAtr) : null,
+    accountValueAtEntry: isFinite(parseFloat(rawTrade.accountValueAtEntry)) && parseFloat(rawTrade.accountValueAtEntry) > 0
+      ? parseFloat(rawTrade.accountValueAtEntry)
+      : accountValue,
+    entryDate: entry.display,
+    entryISO: entry.iso,
+    lastUpdatedDate: lastUpdated.display,
+    lastUpdatedISO: lastUpdated.iso,
+    entryReason: normalizeText(rawTrade.entryReason, '').trim(),
+    exitReasonDraft: normalizeText(rawTrade.exitReasonDraft, '').trim(),
+    soldShares: isFinite(soldSharesRaw) ? Math.max(0, Math.floor(soldSharesRaw)) : 0,
+    soldValue: isFinite(soldValueRaw) && soldValueRaw >= 0 ? soldValueRaw : 0,
+    updateLog
+  };
+}
+
+function normalizeHistoryItem(rawHistoryItem) {
+  if (!rawHistoryItem || typeof rawHistoryItem !== 'object' || Array.isArray(rawHistoryItem)) return null;
+  const ticker = normalizeTicker(rawHistoryItem.ticker);
+  const entryPrice = parseFloat(rawHistoryItem.entryPrice);
+  const exitPrice = parseFloat(rawHistoryItem.exitPrice);
+  const shares = Math.floor(parseFloat(rawHistoryItem.shares));
+  const totalRisk = parseFloat(rawHistoryItem.totalRisk);
+  const pnl = parseFloat(rawHistoryItem.pnl);
+  const returnPct = parseFloat(rawHistoryItem.returnPct);
+  if (!ticker || !isFinite(entryPrice) || entryPrice <= 0 || !isFinite(exitPrice) || exitPrice <= 0 ||
+      !isFinite(shares) || shares <= 0 || !isFinite(totalRisk) || !isFinite(pnl) || !isFinite(returnPct)) {
+    return null;
+  }
+
+  const actualRiskPctRaw = parseFloat(rawHistoryItem.actualRiskPct);
+  const entry = normalizeDateFields(rawHistoryItem.entryISO, rawHistoryItem.entryDate);
+  const exit = normalizeDateFields(rawHistoryItem.exitISO, rawHistoryItem.exitDate);
+
+  return {
+    ticker,
+    entryPrice,
+    entryDate: entry.display,
+    entryISO: entry.iso,
+    exitPrice,
+    exitDate: exit.display,
+    exitISO: exit.iso,
+    shares,
+    totalRisk,
+    actualRiskPct: isFinite(actualRiskPctRaw) ? actualRiskPctRaw : null,
+    pnl,
+    returnPct,
+    entryReason: normalizeText(rawHistoryItem.entryReason, '').trim(),
+    exitReason: normalizeText(rawHistoryItem.exitReason, '').trim()
+  };
+}
+
+function deriveLegacyCashBalance(accountValue, activeTrades, pendingOrders) {
+  // Older versions kept accountValue unchanged during partial sells and did
+  // not have a cash ledger. Reconstruct the real cash balance from the
+  // original purchase basis and the proceeds already recorded in soldValue.
+  const activeOriginalCost = activeTrades.reduce((sum, trade) => {
+    const originalShares = trade.shares + trade.soldShares;
+    return sum + (trade.actualPrice * originalShares);
+  }, 0);
+  const partialSaleProceeds = activeTrades.reduce((sum, trade) => sum + trade.soldValue, 0);
+  const pendingFilledCost = pendingOrders.reduce((sum, order) => sum + order.filledValue, 0);
+  return Math.max(0, accountValue - activeOriginalCost + partialSaleProceeds - pendingFilledCost);
+}
+
+function normalizePersistedState(rawState) {
+  const raw = rawState && typeof rawState === 'object' && !Array.isArray(rawState) ? rawState : {};
+  const accountRaw = parseFloat(raw.accountValue);
+  const accountValue = isFinite(accountRaw) && accountRaw > 0 ? accountRaw : DEFAULT_ACCOUNT_VALUE;
+
+  const rawPending = Array.isArray(raw.pendingOrders) ? raw.pendingOrders : [];
+  const pendingOrders = rawPending.map(order => normalizePendingOrder(order, accountValue)).filter(Boolean);
+  const rawActive = Array.isArray(raw.activeTrades) ? raw.activeTrades : [];
+  const activeTrades = rawActive.map(trade => normalizeActiveTrade(trade, accountValue)).filter(Boolean);
+  const rawHistory = Array.isArray(raw.history) ? raw.history : [];
+  const history = rawHistory.map(item => normalizeHistoryItem(item)).filter(Boolean);
+
+  const closedDates = Array.isArray(raw.closedDates || raw.marketClosures)
+    ? Array.from(new Set((raw.closedDates || raw.marketClosures).filter(validISODate))).sort()
+    : [];
+
+  const cashRaw = parseFloat(raw.cashBalance);
+  const cashBalance = isFinite(cashRaw) && cashRaw >= 0
+    ? cashRaw
+    : deriveLegacyCashBalance(accountValue, activeTrades, pendingOrders);
+
+  const screenerCandidates = Array.isArray(raw.screenerCandidates)
+    ? raw.screenerCandidates
+        .filter(candidate => candidate && typeof candidate === 'object' && normalizeTicker(candidate.ticker))
+        .map(candidate => ({
+          ticker: normalizeTicker(candidate.ticker),
+          tt: sanitizeNumber(candidate.tt, 0),
+          rs: sanitizeNumber(candidate.rs, 0),
+          vcp: sanitizeNumber(candidate.vcp, 0)
+        }))
+    : [];
+
+  return {
+    state: {
+      accountValue,
+      cashBalance,
+      realizedPnl: sanitizeNumber(raw.realizedPnl, 0),
+      indexBars: normalizeIndexBars(raw.indexBars),
+      closedDates,
+      pendingOrders,
+      activeTrades,
+      history,
+      screenerCandidates
+    },
+    dropped: {
+      pendingOrders: rawPending.length - pendingOrders.length,
+      activeTrades: rawActive.length - activeTrades.length,
+      history: rawHistory.length - history.length
+    }
+  };
+}
+
 function exportState() {
   const exportData = {
     exportedAt: new Date().toISOString(),
-    appVersion: '2.0.0',
+    appVersion: '2.1.0',
     state
   };
   const json = JSON.stringify(exportData, null, 2);
@@ -316,59 +644,6 @@ function importState(event) {
         throw new Error(`Missing required field(s): ${missing.join(', ')}`);
       }
 
-      // Merge into state with type guards
-      state.accountValue = sanitizeNumber(importedState.accountValue, 1000000.00);
-      state.indexBars = Array.isArray(importedState.indexBars)
-        ? importedState.indexBars.filter(b => b && typeof b.date === 'string' && isFinite(parseFloat(b.close)) && isFinite(parseFloat(b.volume)))
-            .map(b => ({ date: b.date, close: parseFloat(b.close), volume: parseFloat(b.volume) }))
-        : [];
-
-      state.pendingOrders = Array.isArray(importedState.pendingOrders) ? importedState.pendingOrders : [];
-      const droppedOrders = state.pendingOrders.filter(o => !isFinite(parseFloat(o?.plannedEntry)) || !isFinite(parseFloat(o?.atr)));
-      state.pendingOrders = state.pendingOrders.filter(o => isFinite(parseFloat(o?.plannedEntry)) && isFinite(parseFloat(o?.atr)));
-      state.pendingOrders.forEach(o => {
-        o.plannedEntry = sanitizeNumber(o.plannedEntry, 0);
-        o.atr = sanitizeNumber(o.atr, 0);
-        o.plannedStop = sanitizeNumber(o.plannedStop, o.plannedEntry - ATR_MULTIPLIER * o.atr);
-        o.shares = sanitizeNumber(o.shares, 0);
-        o.filledShares = sanitizeNumber(o.filledShares, 0);
-        o.filledValue = sanitizeNumber(o.filledValue, 0);
-        o.daysWaiting = sanitizeNumber(o.daysWaiting, 0);
-        o.accountValueAtEntry = sanitizeNumber(o.accountValueAtEntry, state.accountValue);
-        if (typeof o.entryReason !== 'string') o.entryReason = '';
-      });
-
-      state.activeTrades = Array.isArray(importedState.activeTrades) ? importedState.activeTrades : [];
-      const droppedTrades = state.activeTrades.filter(t => !isFinite(parseFloat(t?.actualPrice)) || !isFinite(parseFloat(t?.shares)));
-      state.activeTrades = state.activeTrades.filter(t => isFinite(parseFloat(t?.actualPrice)) && isFinite(parseFloat(t?.shares)));
-      state.activeTrades.forEach(t => {
-        t.actualPrice = sanitizeNumber(t.actualPrice, 0);
-        t.shares = sanitizeNumber(t.shares, 0);
-        t.initialAtr = sanitizeNumber(t.initialAtr, 0);
-        t.initialStop = sanitizeNumber(t.initialStop, t.actualPrice - ATR_MULTIPLIER * t.initialAtr);
-        t.trailingStop = sanitizeNumber(t.trailingStop, t.initialStop);
-        t.highestClose = sanitizeNumber(t.highestClose, t.actualPrice);
-        t.lastClose = sanitizeNumber(t.lastClose, t.actualPrice);
-        t.accountValueAtEntry = sanitizeNumber(t.accountValueAtEntry, state.accountValue);
-        if (typeof t.soldShares !== 'number' || !isFinite(t.soldShares)) t.soldShares = 0;
-        if (typeof t.soldValue !== 'number' || !isFinite(t.soldValue)) t.soldValue = 0;
-        if (typeof t.entryReason !== 'string') t.entryReason = '';
-      });
-
-      state.history = Array.isArray(importedState.history) ? importedState.history : [];
-
-      state.screenerCandidates = Array.isArray(importedState.screenerCandidates) ? importedState.screenerCandidates : [];
-      state.screenerCandidates = state.screenerCandidates
-        .filter(c => c && typeof c.ticker === 'string' && c.ticker.trim() !== '')
-        .map(c => ({
-          ticker: c.ticker.toUpperCase().trim(),
-          tt: sanitizeNumber(c.tt, 0),
-          rs: sanitizeNumber(c.rs, 0),
-          vcp: sanitizeNumber(c.vcp, 0)
-        }));
-
-      saveState();
-
       // Clear stale form inputs so they don't linger with pre-import values
       elements.calcTicker.value = '';
       elements.calcEntry.value = '';
@@ -381,9 +656,13 @@ function importState(event) {
       elements.routineClose.value = '';
       elements.routineAtr.value = '';
 
-      const droppedCount = droppedOrders.length + droppedTrades.length;
+      const normalized = normalizePersistedState(importedState);
+      state = normalized.state;
+      saveState();
+
+      const droppedCount = normalized.dropped.pendingOrders + normalized.dropped.activeTrades + normalized.dropped.history;
       const droppedNote = droppedCount > 0
-        ? `\n\nWarning: ${droppedCount} record(s) had invalid/missing price data and were skipped rather than imported.`
+        ? `\n\nWarning: ${droppedCount} malformed record(s) were skipped rather than imported.`
         : '';
       await appAlert(`Import successful! Loaded ${state.pendingOrders.length} pending order(s), ${state.activeTrades.length} active trade(s) and ${state.history.length} history record(s).${droppedNote}`);
     } catch (err) {
@@ -408,51 +687,11 @@ function loadState() {
     try {
       const parsed = JSON.parse(saved);
       if (parsed && typeof parsed === 'object') {
-        state.accountValue = sanitizeNumber(parsed.accountValue, 1000000.00);
-        state.indexBars = Array.isArray(parsed.indexBars)
-          ? parsed.indexBars.filter(b => b && typeof b.date === 'string' && isFinite(parseFloat(b.close)) && isFinite(parseFloat(b.volume)))
-              .map(b => ({ date: b.date, close: parseFloat(b.close), volume: parseFloat(b.volume) }))
-          : [];
-
-        state.pendingOrders = Array.isArray(parsed.pendingOrders) ? parsed.pendingOrders : [];
-        state.pendingOrders.forEach(o => {
-          o.plannedEntry = sanitizeNumber(o.plannedEntry, 0);
-          o.atr = sanitizeNumber(o.atr, 0);
-          o.plannedStop = sanitizeNumber(o.plannedStop, o.plannedEntry - ATR_MULTIPLIER * o.atr);
-          o.shares = sanitizeNumber(o.shares, 0);
-          o.filledShares = sanitizeNumber(o.filledShares, 0);
-          o.filledValue = sanitizeNumber(o.filledValue, 0);
-          o.daysWaiting = sanitizeNumber(o.daysWaiting, 0);
-          o.accountValueAtEntry = sanitizeNumber(o.accountValueAtEntry, state.accountValue);
-          if (typeof o.entryReason !== 'string') o.entryReason = '';
-        });
-
-        state.activeTrades = Array.isArray(parsed.activeTrades) ? parsed.activeTrades : [];
-        state.activeTrades.forEach(t => {
-          t.actualPrice = sanitizeNumber(t.actualPrice, 0);
-          t.shares = sanitizeNumber(t.shares, 0);
-          t.initialAtr = sanitizeNumber(t.initialAtr, 0);
-          t.initialStop = sanitizeNumber(t.initialStop, t.actualPrice - ATR_MULTIPLIER * t.initialAtr);
-          t.trailingStop = sanitizeNumber(t.trailingStop, t.initialStop);
-          t.highestClose = sanitizeNumber(t.highestClose, t.actualPrice);
-          t.lastClose = sanitizeNumber(t.lastClose, t.actualPrice);
-          t.accountValueAtEntry = sanitizeNumber(t.accountValueAtEntry, state.accountValue);
-          if (typeof t.soldShares !== 'number' || !isFinite(t.soldShares)) t.soldShares = 0;
-          if (typeof t.soldValue !== 'number' || !isFinite(t.soldValue)) t.soldValue = 0;
-          if (typeof t.entryReason !== 'string') t.entryReason = '';
-        });
-
-        state.history = Array.isArray(parsed.history) ? parsed.history : [];
-
-        state.screenerCandidates = Array.isArray(parsed.screenerCandidates) ? parsed.screenerCandidates : [];
-        state.screenerCandidates = state.screenerCandidates
-          .filter(c => c && typeof c.ticker === 'string' && c.ticker.trim() !== '')
-          .map(c => ({
-            ticker: c.ticker.toUpperCase().trim(),
-            tt: sanitizeNumber(c.tt, 0),
-            rs: sanitizeNumber(c.rs, 0),
-            vcp: sanitizeNumber(c.vcp, 0)
-          }));
+        const normalized = normalizePersistedState(parsed);
+        state = normalized.state;
+        if (normalized.dropped.pendingOrders || normalized.dropped.activeTrades || normalized.dropped.history) {
+          console.warn('Dropped malformed persisted records:', normalized.dropped);
+        }
       }
     } catch (e) {
       console.error('Failed to parse saved state:', e);
@@ -602,26 +841,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Converts a pending GTC order's accumulated fills into an active trade,
 // using the volume-weighted average price across every partial fill logged.
-function convertOrderToActiveTrade(order) {
+// `context` is supplied when the conversion happens as part of today's
+// pending-order log.  That day's close/ATR must become the first active-trade
+// update; otherwise a fill-day stop breach can disappear and stale ATR data
+// will set the initial risk.
+function convertOrderToActiveTrade(order, context = {}) {
   const vwap = order.filledValue / order.filledShares;
-  const initialStop = vwap - (ATR_MULTIPLIER * order.atr);
+  const todayClose = isFinite(context.todayClose) && context.todayClose > 0 ? context.todayClose : null;
+  const todayAtr = isFinite(context.todayAtr) && context.todayAtr > 0 ? context.todayAtr : null;
+  const effectiveAtr = todayAtr || order.atr;
+  const fillDateISO = validISODate(context.fillDateISO) || order.lastLoggedISO || todayISODateString();
+  const entryISO = validISODate(order.firstFillISO) || validISODate(context.fillDateISO) || fillDateISO;
+  const entryDate = order.firstFillDate || displayDateFromISO(entryISO);
+  const initialStop = vwap - (ATR_MULTIPLIER * effectiveAtr);
 
   const newTrade = {
     ticker: order.ticker,
     plannedEntry: order.plannedEntry,
     actualPrice: vwap,
     shares: order.filledShares,
-    initialAtr: order.atr,
+    initialAtr: effectiveAtr,
     initialStop,
-    trailingStop: initialStop,
+    // Keep the pending order's current stop as a floor when a close/ATR log
+    // is converting the order.  In particular, a close below that stop must
+    // remain visibly below the active trade's stop and produce an exit signal.
+    trailingStop: todayClose !== null ? Math.max(initialStop, order.plannedStop) : initialStop,
     highestClose: vwap,
-    lastClose: vwap,
+    lastClose: todayClose !== null ? todayClose : vwap,
+    lastAtr: todayAtr,
     // Use the account value that was actually used to size this order (captured
     // when it was first placed), not today's value — the share count was fixed
     // against that original sizing, even if this order took several days to fill.
     accountValueAtEntry: order.accountValueAtEntry != null ? order.accountValueAtEntry : state.accountValue,
-    entryDate: new Date().toLocaleDateString(),
-    entryISO: todayISODateString(), // robust, locale-independent — used for catch-up date math
+    entryDate,
+    entryISO, // actual first-fill date, used for catch-up date math
     entryReason: order.entryReason || '',  // why the trade was taken — carried through to history on exit
     soldShares: 0,   // cumulative shares exited so far (for multi-day/illiquid exits)
     soldValue: 0,    // cumulative Rs. received so far, for exit VWAP
@@ -629,6 +882,40 @@ function convertOrderToActiveTrade(order) {
   };
 
   state.activeTrades.push(newTrade);
+
+  if (todayClose !== null && todayAtr !== null) {
+    applyDailyUpdate(newTrade, fillDateISO, todayClose, todayAtr);
+  }
+
+  return newTrade;
+}
+
+function clearPendingOrderInputs(row) {
+  if (!row) return;
+  row.querySelectorAll('.pending-close-input, .pending-atr-input, .pending-fill-shares-input, .pending-fill-price-input')
+    .forEach(input => { input.value = ''; });
+}
+
+function recordPendingFill(order, fillShares, fillPrice, fillDateISO) {
+  const fillValue = fillShares * fillPrice;
+  order.filledShares += fillShares;
+  order.filledValue += fillValue;
+  adjustCashBalance(-fillValue);
+
+  const dates = normalizeDateFields(fillDateISO, '');
+  if (!order.firstFillISO && dates.iso) {
+    order.firstFillISO = dates.iso;
+    order.firstFillDate = dates.display;
+  }
+  if (!Array.isArray(order.fillLog)) order.fillLog = [];
+  if (dates.iso) {
+    order.fillLog.push({
+      dateISO: dates.iso,
+      date: dates.display,
+      shares: fillShares,
+      price: fillPrice
+    });
+  }
 }
 
 function setupEventListeners() {
@@ -702,6 +989,26 @@ function setupEventListeners() {
     renderDistributionPanel();
   });
 
+  // Keep holidays and ad-hoc exchange closures explicit and editable.  The
+  // weekday rule is only a fallback; this list is what protects daily logs
+  // from counting a public holiday as an attempt/session.
+  if (elements.sessionClosuresSaveBtn && elements.sessionClosuresInput) {
+    elements.sessionClosuresSaveBtn.addEventListener('click', async () => {
+      const rawDates = elements.sessionClosuresInput.value
+        .split(/[\s,;]+/)
+        .map(value => value.trim())
+        .filter(Boolean);
+      const invalidDates = rawDates.filter(value => !validISODate(value));
+      if (invalidDates.length > 0) {
+        await appAlert(`These closure dates are invalid: ${invalidDates.join(', ')}. Use YYYY-MM-DD.`);
+        return;
+      }
+      state.closedDates = Array.from(new Set(rawDates)).sort();
+      saveState();
+      await appAlert(`Session calendar saved with ${state.closedDates.length} closure date(s).`);
+    });
+  }
+
   // --- Screener Shortlist (Step 01) ---
   elements.screenerFilterGroup.querySelectorAll('.filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -724,7 +1031,11 @@ function setupEventListeners() {
   elements.saveAccountBtn.addEventListener('click', () => {
     const val = parseFloat(elements.modalAccountValue.value);
     if (!isNaN(val) && val > 0) {
+      const accountDelta = val - state.accountValue;
       state.accountValue = val;
+      // Keep the cash ledger aligned when the user deposits, withdraws, or
+      // corrects the account value while positions are still open.
+      adjustCashBalance(accountDelta);
       elements.accountModal.classList.remove('active');
       saveState();
       calculatePosition();
@@ -737,8 +1048,11 @@ function setupEventListeners() {
       if (await appConfirm('Double checking: This action CANNOT be undone. Proceed with full reset?')) {
         localStorage.removeItem('nepse_efficient_trader_state');
         state = {
-          accountValue: 1000000.00,
+          accountValue: DEFAULT_ACCOUNT_VALUE,
+          cashBalance: DEFAULT_ACCOUNT_VALUE,
+          realizedPnl: 0,
           indexBars: [],
+          closedDates: [],
           pendingOrders: [],
           activeTrades: [],
           history: [],
@@ -783,9 +1097,16 @@ function setupEventListeners() {
     const macroGate = getMacroGateStatus();
     if (macroGate.blocked) {
       await appAlert(
-        `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).\n\n` +
-        `Manage existing positions/orders as normal — this only blocks placing new day-orders. It will unblock once the count drops, or a Follow-Through Day resets it.`
+        (macroGate.insufficientHistory
+          ? 'New entries are blocked until at least two valid index sessions are available to establish a confirmed market state.'
+          : `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).`) +
+        `\n\nManage existing positions/orders as normal — this only blocks placing new day-orders. It will unblock once the market state is confirmed and healthy.`
       );
+      return;
+    }
+
+    if (!isNepseTradingDay(new Date())) {
+      await appAlert('New day-orders can only be placed on a NEPSE trading session. Check the session calendar and try again on the next open session.');
       return;
     }
 
@@ -813,8 +1134,7 @@ function setupEventListeners() {
 
     // Guard: available cash (risk-based sizing has no built-in cap on capital deployed,
     // only on total risk — so check we actually have the cash for this position).
-    const capitalDeployed = getCapitalDeployed();
-    const cashAvailable = state.accountValue - capitalDeployed;
+    const cashAvailable = getAvailableCash();
     const requiredCapital = size * entry;
     if (requiredCapital > cashAvailable) {
       const affordableSize = Math.floor(cashAvailable / entry);
@@ -841,6 +1161,12 @@ function setupEventListeners() {
       filledValue: 0,        // cumulative price*shares filled so far, for VWAP
       daysWaiting: 0,
       placedDate: new Date().toLocaleDateString(),
+      placedISO: todayISODateString(),
+      firstFillDate: '',
+      firstFillISO: null,
+      fillLog: [],
+      lastLoggedDate: '',
+      lastLoggedISO: null,
       accountValueAtEntry: state.accountValue,  // account value used to size this order originally
       entryReason              // why the trade was taken — optional, carried through to the active trade and history
     });
@@ -899,6 +1225,17 @@ function setupEventListeners() {
       const initialOrder = state.pendingOrders[idx];
       if (!initialOrder) return;
       const ticker = initialOrder.ticker;
+      const today = new Date();
+      const todayISO = toISODateString(today);
+      if (!isNepseTradingDay(today)) {
+        await appAlert(`Today (${displayDateFromISO(todayISO)}) is not a NEPSE trading session. No pending-order attempt was recorded.`);
+        return;
+      }
+      if (initialOrder.lastLoggedISO === todayISO) {
+        await appAlert(`${ticker} has already been logged for ${displayDateFromISO(todayISO)}. The saved close, ATR, and fill data were not applied again.`);
+        renderAll();
+        return;
+      }
       const row = logTodayBtn.closest('.pending-order-card');
       const todayClose = parseFloat(row.querySelector('.pending-close-input').value);
       const todayAtr = parseFloat(row.querySelector('.pending-atr-input').value);
@@ -944,31 +1281,52 @@ function setupEventListeners() {
           return;
         }
 
-        order.filledShares += fillShares;
-        order.filledValue += fillPrice * fillShares;
+        recordPendingFill(order, fillShares, fillPrice, todayISO);
 
         if (order.filledShares >= order.shares) {
-          // Fully filled today (possibly the last of several partial fills) — move to active trade
-          convertOrderToActiveTrade(order);
+          // Fully filled today (possibly the last of several partial fills) —
+          // move to active trade using today's close and ATR.
+          order.lastLoggedISO = todayISO;
+          order.lastLoggedDate = displayDateFromISO(todayISO);
+          order.atr = todayAtr;
+          const newTrade = convertOrderToActiveTrade(order, {
+            todayClose,
+            todayAtr,
+            fillDateISO: todayISO
+          });
           const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
           if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+          clearPendingOrderInputs(row);
           saveState();
-          await appAlert(`${order.ticker}: fully filled at a VWAP of Rs. ${(order.filledValue / order.filledShares).toFixed(2)}. Moved to Active Trades.`);
+          const exitNote = newTrade.lastClose < newTrade.trailingStop
+            ? "\n\nEXIT SIGNAL: today's close is below the active trade stop. Sell at the next open."
+            : '';
+          await appAlert(`${order.ticker}: fully filled at a VWAP of Rs. ${(order.filledValue / order.filledShares).toFixed(2)}. Moved to Active Trades.${exitNote}`);
           return;
         }
       }
 
+      // Store the trading-date token before any remaining branch saves or
+      // converts the order. A second click on this card cannot repeat a fill
+      // or consume another attempt.
+      order.lastLoggedISO = todayISO;
+      order.lastLoggedDate = displayDateFromISO(todayISO);
+
       // Step 2: cancellation rule 1 — today's close dropped below TODAY's stop (the one set yesterday)
       if (todayClose < order.plannedStop) {
         const hadFill = order.filledShares > 0;
-        if (hadFill) convertOrderToActiveTrade(order);
+        const newTrade = hadFill
+          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO })
+          : null;
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        clearPendingOrderInputs(row);
         saveState();
         await appAlert(
           `${order.ticker}: close (Rs. ${todayClose.toFixed(2)}) fell below today's stop (Rs. ${order.plannedStop.toFixed(2)}).\n\n` +
           (hadFill
-            ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP. The unfilled remainder (${order.shares - order.filledShares}) is cancelled.`
+            ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder (${order.shares - order.filledShares}) is cancelled.` +
+              (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
             : `No shares had been filled — order cancelled per strategy rules.`)
         );
         return;
@@ -980,14 +1338,18 @@ function setupEventListeners() {
       // Cancellation rule 2 — day-order attempts capped at 5 trading days total
       if (order.daysWaiting >= MAX_DAY_ORDER_ATTEMPTS) {
         const hadFill = order.filledShares > 0;
-        if (hadFill) convertOrderToActiveTrade(order);
+        const newTrade = hadFill
+          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO })
+          : null;
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        clearPendingOrderInputs(row);
         saveState();
         await appAlert(
           `${order.ticker}: order window closed after ${MAX_DAY_ORDER_ATTEMPTS} trading days.\n\n` +
           (hadFill
-            ? `${order.filledShares} of ${order.shares} planned shares were filled and converted into an active trade at their VWAP. The unfilled remainder is cancelled.`
+            ? `${order.filledShares} of ${order.shares} planned shares were filled and converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder is cancelled.` +
+              (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
             : `Nothing was filled — order cancelled per strategy rules.`)
         );
         return;
@@ -1007,10 +1369,10 @@ function setupEventListeners() {
       // re-checks that cash is actually available for the larger size — so successive
       // re-prices across multiple pending orders could quietly commit more capital than
       // exists. Cap the target to what's actually affordable, same as initial placement.
-      const otherCapitalDeployed = getCapitalDeployed() - (
-        order.filledValue + (order.shares - order.filledShares) * order.plannedEntry
-      );
-      const cashAvailableForThisOrder = state.accountValue - otherCapitalDeployed - order.filledValue;
+      // Filled shares have already reduced cashBalance.  Exclude this order's
+      // old unfilled reservation while sizing its replacement, but retain all
+      // other pending orders' reservations.
+      const cashAvailableForThisOrder = getAvailableCash(order);
       const affordableNewShares = order.filledShares + Math.floor(cashAvailableForThisOrder / todayClose);
       let cappedByCash = false;
       if (newTargetShares > affordableNewShares) {
@@ -1028,6 +1390,7 @@ function setupEventListeners() {
         // 0-share order sitting in the list forever.
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        clearPendingOrderInputs(row);
         saveState();
         await appAlert(
           cappedByCash
@@ -1044,6 +1407,7 @@ function setupEventListeners() {
       if (newTargetShares > 0 && newTargetShares < MIN_LOT_SIZE && order.filledShares === 0) {
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        clearPendingOrderInputs(row);
         saveState();
         await appAlert(
           `${order.ticker}: today's re-priced risk math only supports ${newTargetShares} share(s), below the ${MIN_LOT_SIZE}-share practical minimum. Order cancelled.`
@@ -1054,11 +1418,15 @@ function setupEventListeners() {
       if (newTargetShares <= order.filledShares && order.filledShares > 0) {
         // Updated risk math says you already hold at (or above) today's target size —
         // stop trying to buy more; take what you have.
-        convertOrderToActiveTrade(order);
+        const newTrade = convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO });
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        clearPendingOrderInputs(row);
         saveState();
-        await appAlert(`${order.ticker}: today's re-priced risk math caps the target at ${newTargetShares} share(s), which you've already filled. Order completed and moved to Active Trades.`);
+        const exitNote = newTrade.lastClose < newTrade.trailingStop
+          ? ' EXIT SIGNAL is active for the filled position.'
+          : '';
+        await appAlert(`${order.ticker}: today's re-priced risk math caps the target at ${newTargetShares} share(s), which you've already filled. Order completed and moved to Active Trades.${exitNote}`);
         return;
       }
 
@@ -1068,6 +1436,7 @@ function setupEventListeners() {
       // computed against a stale account value from the original placement day, even
       // though the share count above was just resized against TODAY's account value.
       order.accountValueAtEntry = state.accountValue;
+      clearPendingOrderInputs(row);
       saveState();
       await appAlert(
         `${order.ticker}: rolled forward for tomorrow — new order: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
@@ -1129,7 +1498,14 @@ function setupEventListeners() {
       return;
     }
 
-    applyDailyUpdate(trade, todayISODateString(), todayClose, todayAtr);
+    const today = new Date();
+    const todayISO = toISODateString(today);
+    if (!isNepseTradingDay(today)) {
+      await appAlert(`Today (${displayDateFromISO(todayISO)}) is not a NEPSE trading session, so no daily update was recorded.`);
+      return;
+    }
+
+    applyDailyUpdate(trade, todayISO, todayClose, todayAtr);
     saveState();
 
     // Reset form
@@ -1246,8 +1622,7 @@ function calculatePosition() {
     elements.resPositionSize.style.color = belowMinLot ? 'var(--color-danger)' : '';
 
     // Capital availability check (risk-based sizing has no built-in cap on capital deployed)
-    const capitalDeployed = getCapitalDeployed();
-    const cashAvailable = state.accountValue - capitalDeployed;
+    const cashAvailable = getAvailableCash();
     const requiredCapital = positionSize * entry;
     const cashOk = requiredCapital <= cashAvailable;
 
@@ -1574,7 +1949,8 @@ const DISTRIBUTION_RECOVERY_PCT = 6;           // a distribution day is removed 
 // trailing/exiting normally — the gate only stops *new* entries.
 function getMacroGateStatus() {
   const { count, level } = computeDistributionDays(state.indexBars);
-  return { blocked: level === 'distribution', count, level };
+  const insufficientHistory = !Array.isArray(state.indexBars) || state.indexBars.length < 2;
+  return { blocked: insufficientHistory || level === 'distribution', count, level, insufficientHistory };
 }
 
 // Splits one CSV line respecting double-quoted fields (which may contain
@@ -1616,7 +1992,7 @@ function parsePastedIndexBars(text) {
       const date = fields[1];
       const close = parseFloat(fields[5].replace(/[^0-9.\-]/g, ''));
       const volume = parseFloat(fields[7].replace(/[^0-9.\-]/g, ''));
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
+      if (!validISODate(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
       bars.push({ date, close, volume });
       return;
     }
@@ -1626,7 +2002,7 @@ function parsePastedIndexBars(text) {
     const [date, closeRaw, volumeRaw] = parts;
     const close = parseFloat(closeRaw.replace(/[^0-9.\-]/g, ''));
     const volume = parseFloat(volumeRaw.replace(/[^0-9.\-]/g, ''));
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
+    if (!validISODate(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
     bars.push({ date, close, volume });
   });
   return { bars, skippedCount };
@@ -1662,7 +2038,10 @@ function parsePastedIndexBars(text) {
 // --------------------------------------------------------------------------
 function computeDistributionDays(bars) {
   if (!Array.isArray(bars) || bars.length < 2) {
-    return { count: 0, level: 'normal', flagged: [], ftdDate: null, state: 'uptrend' };
+    // A short history cannot establish the correction -> rally attempt ->
+    // confirmed uptrend state. Treat it as blocked instead of treating
+    // missing macro data as a healthy tape.
+    return { count: 0, level: 'distribution', flagged: [], ftdDate: null, state: 'correction' };
   }
 
   let marketState = 'correction';
@@ -1679,7 +2058,7 @@ function computeDistributionDays(bars) {
       // Expire distribution days older than the trailing window, or ones
       // price has since recovered DISTRIBUTION_RECOVERY_PCT% above.
       activeDist = activeDist.filter(d =>
-        (i - d.index) <= DISTRIBUTION_WINDOW_DAYS &&
+        (i - d.index) < DISTRIBUTION_WINDOW_DAYS &&
         cur.close < d.close * (1 + DISTRIBUTION_RECOVERY_PCT / 100)
       );
 
@@ -1692,6 +2071,8 @@ function computeDistributionDays(bars) {
         marketState = 'correction';
         attemptLow = null;
         attemptStartIndex = -1;
+        lastFtdIndex = -1;
+        activeDist = [];
       }
       continue;
     }
@@ -1744,10 +2125,13 @@ function computeDistributionDays(bars) {
 
 function renderDistributionPanel() {
   const { count, level, flagged, ftdDate, state: marketState } = computeDistributionDays(state.indexBars);
+  if (elements.sessionClosuresInput && document.activeElement !== elements.sessionClosuresInput) {
+    elements.sessionClosuresInput.value = state.closedDates.join(', ');
+  }
 
   if (state.indexBars.length === 0) {
-    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count.';
-    elements.macroStatusText.className = 'macro-status-text clear';
+    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count. New entries are blocked until enough history is available.';
+    elements.macroStatusText.className = 'macro-status-text halted';
     elements.distributionDaysList.innerHTML = '';
     elements.haltBanner.style.display = 'none';
     return;
@@ -1845,6 +2229,8 @@ function renderPendingOrders() {
   state.pendingOrders.forEach((order, idx) => {
     const daysLeft = MAX_DAY_ORDER_ATTEMPTS - order.daysWaiting;
     const hasPartialFill = order.filledShares > 0;
+    const loggedToday = order.lastLoggedISO === todayISODateString();
+    const inputDisabled = loggedToday ? ' disabled' : '';
     const card = document.createElement('div');
     card.className = 'trade-card pending-order-card';
 
@@ -1871,7 +2257,7 @@ function renderPendingOrders() {
         </div>
         <div>
           <span class="card-grid-lbl">First Placed On</span>
-          <span class="card-grid-val">${order.placedDate}</span>
+          <span class="card-grid-val">${escapeHTML(order.placedDate)}</span>
         </div>
       </div>
 
@@ -1884,12 +2270,14 @@ function renderPendingOrders() {
         Day order — cancels at session end. Log today's close &amp; ATR below to re-price and resubmit for tomorrow.
       </p>
 
+      ${loggedToday ? `<p class="text-muted" style="font-size: 0.72rem; margin: 0.45rem 0 0;">Logged for ${escapeHTML(order.lastLoggedDate || displayDateFromISO(todayISODateString()))}; it can be logged again on the next trading session.</p>` : ''}
+
       <div class="form-grid" style="margin-top: 0.5rem;">
         <div class="input-group">
           <label>Today's Close (required)</label>
           <div class="input-wrapper number-spin-wrap">
             <span class="input-prefix">Rs.</span>
-            <input type="number" class="pending-close-input" placeholder="0.00" step="0.01">
+            <input type="number" class="pending-close-input" placeholder="0.00" step="0.01"${inputDisabled}>
             <div class="spin-buttons">
               <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
               <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
@@ -1899,7 +2287,7 @@ function renderPendingOrders() {
         <div class="input-group">
           <label>Today's ATR(14) (required)</label>
           <div class="input-wrapper number-spin-wrap">
-            <input type="number" class="pending-atr-input" placeholder="0.00" step="0.01">
+            <input type="number" class="pending-atr-input" placeholder="0.00" step="0.01"${inputDisabled}>
             <div class="spin-buttons">
               <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
               <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
@@ -1909,7 +2297,7 @@ function renderPendingOrders() {
         <div class="input-group">
           <label>Shares Filled Today (leave blank if none)</label>
           <div class="input-wrapper number-spin-wrap">
-            <input type="number" class="pending-fill-shares-input" placeholder="0" step="1" max="${order.shares - order.filledShares}">
+            <input type="number" class="pending-fill-shares-input" placeholder="0" step="1" max="${order.shares - order.filledShares}"${inputDisabled}>
             <div class="spin-buttons">
               <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
               <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
@@ -1920,7 +2308,7 @@ function renderPendingOrders() {
           <label>Fill Price (if any filled today)</label>
           <div class="input-wrapper number-spin-wrap">
             <span class="input-prefix">Rs.</span>
-            <input type="number" class="pending-fill-price-input" placeholder="0.00" step="0.01">
+            <input type="number" class="pending-fill-price-input" placeholder="0.00" step="0.01"${inputDisabled}>
             <div class="spin-buttons">
               <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
               <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
@@ -1930,8 +2318,8 @@ function renderPendingOrders() {
       </div>
 
       <div class="trade-card-footer">
-        <button class="btn btn-success log-today-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
-          <i class="fa-solid fa-calendar-check"></i> Log Today &amp; Re-Price
+        <button class="btn btn-success log-today-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}"${loggedToday ? ' disabled' : ''}>
+          <i class="fa-solid fa-calendar-check"></i> ${loggedToday ? 'Logged Today' : 'Log Today &amp; Re-Price'}
         </button>
         <button class="btn btn-secondary btn-danger-action cancel-order-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
           <i class="fa-solid fa-xmark"></i> Cancel
@@ -1943,7 +2331,7 @@ function renderPendingOrders() {
 
     // Restore anything the user had mid-typed for this ticker before the rebuild
     const saved = preserved[order.ticker];
-    if (saved) {
+    if (saved && !loggedToday) {
       card.querySelector('.pending-close-input').value = saved.close;
       card.querySelector('.pending-atr-input').value = saved.atr;
       card.querySelector('.pending-fill-shares-input').value = saved.fillShares;
@@ -2104,7 +2492,7 @@ function renderDailyRoutineDropdown() {
   state.activeTrades.forEach((trade) => {
     const opt = document.createElement('option');
     opt.value = trade.ticker;
-    const missedCount = getMissedTradingDays(resolveSinceDate(trade)).length;
+    const missedCount = getMissedTradingDaysForTrade(trade).length;
     const behindTag = missedCount > 0 ? ` — ⚠ ${missedCount} day${missedCount > 1 ? 's' : ''} behind` : '';
     opt.textContent = `${trade.ticker} (Stop: Rs. ${trade.trailingStop.toFixed(1)})${behindTag}`;
     elements.routineSelect.appendChild(opt);
@@ -2114,13 +2502,32 @@ function renderDailyRoutineDropdown() {
 // --------------------------------------------------------------------------
 // Catch-Up Reminder: flags active trades whose close/ATR log has fallen
 // behind, and lets you backfill the missed NEPSE trading days.
-// NEPSE trades Monday-Friday, so Saturday/Sunday are never "missed" days.
+// Weekdays are the fallback.  `state.closedDates` is the exchange-calendar
+// override for public holidays and ad-hoc NEPSE closures, and uploaded index
+// bars provide the authoritative session set for dates covered by that file.
 // --------------------------------------------------------------------------
 
 const NEPSE_TRADING_WEEKDAYS = [1, 2, 3, 4, 5]; // Mon=1 ... Fri=5 (Sat/Sun are non-trading)
 
-function isNepseTradingDay(date) {
-  return NEPSE_TRADING_WEEKDAYS.includes(date.getDay());
+function isNepseTradingDay(date, options = {}) {
+  if (!(date instanceof Date) || isNaN(date.getTime())) return false;
+  if (!NEPSE_TRADING_WEEKDAYS.includes(date.getDay())) return false;
+
+  const iso = toISODateString(date);
+  if (Array.isArray(state.closedDates) && state.closedDates.includes(iso)) return false;
+
+  // For historical catch-up, an uploaded index series is better evidence than
+  // a weekday heuristic. Outside the uploaded range we still use the configured
+  // calendar plus the weekday fallback so a short CSV does not erase history.
+  if (options.useIndexHistory && Array.isArray(state.indexBars) && state.indexBars.length > 0) {
+    const firstBar = state.indexBars[0].date;
+    const lastBar = state.indexBars[state.indexBars.length - 1].date;
+    if (iso >= firstBar && iso <= lastBar) {
+      return state.indexBars.some(bar => bar.date === iso);
+    }
+  }
+
+  return true;
 }
 
 // Locale-independent "YYYY-MM-DD" for a Date, built from local Y/M/D fields
@@ -2145,7 +2552,13 @@ function parseISODateOnly(str) {
   if (typeof str !== 'string') return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
   if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const d = new Date(year, month - 1, day);
+  // JavaScript normalizes 2026-02-31 to a March date; reject that instead of
+  // silently moving a trading session into the wrong month.
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
   return isNaN(d.getTime()) ? null : d;
 }
 
@@ -2184,14 +2597,14 @@ function resolveSinceDate(trade) {
 // is current-day business that belongs in the normal Daily Routine form, not
 // the catch-up backlog, however late in the day it is. Only fully-closed
 // past trading days ever show up here. Empty array means nothing is missed.
-function getMissedTradingDays(sinceDate) {
+function getMissedTradingDays(sinceDate, options = {}) {
   if (!sinceDate) return [];
   const sinceDay = toDateOnly(sinceDate);
 
   const today = toDateOnly(new Date());
   let mostRecentTradingDay = new Date(today);
   mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
-  while (!isNepseTradingDay(mostRecentTradingDay)) {
+  while (!isNepseTradingDay(mostRecentTradingDay, options)) {
     mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
   }
 
@@ -2201,7 +2614,39 @@ function getMissedTradingDays(sinceDate) {
   const cursor = new Date(sinceDay);
   cursor.setDate(cursor.getDate() + 1);
   while (cursor <= mostRecentTradingDay) {
-    if (isNepseTradingDay(cursor)) missed.push(new Date(cursor));
+    if (isNepseTradingDay(cursor, options)) missed.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return missed;
+}
+
+// New trades retain the actual first-fill date and a dated update log. Use the
+// log's date set rather than only its most recent date so a late conversion
+// still exposes any earlier sessions that were never backfilled.
+function getMissedTradingDaysForTrade(trade) {
+  const hasDatedLog = Array.isArray(trade.updateLog) && trade.updateLog.some(entry => validISODate(entry.dateISO));
+  if (!hasDatedLog) return getMissedTradingDays(resolveSinceDate(trade), { useIndexHistory: true });
+
+  const startDate = parseISODateOnly(trade.entryISO) || legacyParseDisplayDate(trade.entryDate);
+  if (!startDate) return [];
+  const loggedDates = new Set(
+    trade.updateLog.map(entry => entry.dateISO).filter(validISODate)
+  );
+  const today = toDateOnly(new Date());
+  let mostRecentTradingDay = new Date(today);
+  mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
+  while (!isNepseTradingDay(mostRecentTradingDay, { useIndexHistory: true })) {
+    mostRecentTradingDay.setDate(mostRecentTradingDay.getDate() - 1);
+  }
+
+  const missed = [];
+  const cursor = toDateOnly(startDate);
+  cursor.setDate(cursor.getDate() + 1);
+  while (cursor <= mostRecentTradingDay) {
+    const iso = toISODateString(cursor);
+    if (isNepseTradingDay(cursor, { useIndexHistory: true }) && !loggedDates.has(iso)) {
+      missed.push(new Date(cursor));
+    }
     cursor.setDate(cursor.getDate() + 1);
   }
   return missed;
@@ -2214,7 +2659,7 @@ function getTradesNeedingCatchUp() {
   return state.activeTrades
     .map((trade) => ({
       trade,
-      missedDays: getMissedTradingDays(resolveSinceDate(trade))
+      missedDays: getMissedTradingDaysForTrade(trade)
     }))
     .filter((item) => item.missedDays.length > 0);
 }
@@ -2283,12 +2728,13 @@ async function runCatchUpFlow() {
   }
 
   for (const { trade } of items) {
-    // Re-derive per trade (not per day) in case an earlier iteration in this
-    // same run already logged some of its days.
+    // Re-derive after each day so dated logs and late conversions cannot leave
+    // a gap hidden behind the most recent update.
     const ticker = trade.ticker;
-    let missedDays = getMissedTradingDays(resolveSinceDate(trade));
-
-    for (const day of missedDays) {
+    while (true) {
+      const missedDays = getMissedTradingDaysForTrade(trade);
+      const day = missedDays[0];
+      if (!day) break;
       const t = findActiveTradeByTicker(ticker);
       if (!t) break; // sold mid-catchup — nothing left to backfill for it
 
@@ -2360,8 +2806,8 @@ function renderHistory() {
     const notesHtml = notesParts.length > 0 ? notesParts.join('') : '<span class="text-muted">—</span>';
     tr.innerHTML = `
       <td><strong>${escapeHTML(h.ticker)}</strong></td>
-      <td>${h.entryDate}<br><small class="text-muted">Rs. ${formatNPR(h.entryPrice)}</small></td>
-      <td>${h.exitDate}<br><small class="text-muted">Rs. ${formatNPR(h.exitPrice)}</small></td>
+      <td>${escapeHTML(h.entryDate)}<br><small class="text-muted">Rs. ${formatNPR(h.entryPrice)}</small></td>
+      <td>${escapeHTML(h.exitDate)}<br><small class="text-muted">Rs. ${formatNPR(h.exitPrice)}</small></td>
       <td>${h.shares}</td>
       <td>Rs. ${formatNPR(h.totalRisk)}<br><small class="text-muted">${riskPctStr}</small></td>
       <td class="${isGain ? 'text-profit' : 'text-loss'}"><strong>Rs. ${isGain ? '+' : ''}${formatNPR(h.pnl)}</strong></td>
@@ -2448,9 +2894,13 @@ async function sellPositionByTicker(ticker) {
   }
 
   // Accumulate this partial sale into the trade's running exit VWAP
+  const saleCostBasis = trade.actualPrice * sharesSold;
+  const saleProceeds = exitPrice * sharesSold;
   trade.soldShares = (trade.soldShares || 0) + sharesSold;
-  trade.soldValue = (trade.soldValue || 0) + (exitPrice * sharesSold);
+  trade.soldValue = (trade.soldValue || 0) + saleProceeds;
   trade.shares -= sharesSold;
+  adjustCashBalance(saleProceeds);
+  recordRealizedPnl(saleProceeds - saleCostBasis);
 
   if (trade.shares > 0) {
     // Liquidity couldn't absorb the full sale — position stays open with fewer
@@ -2481,8 +2931,10 @@ async function sellPositionByTicker(ticker) {
     ticker: trade.ticker,
     entryPrice: trade.actualPrice,
     entryDate: trade.entryDate,
+    entryISO: trade.entryISO || null,
     exitPrice: avgExitPrice,
     exitDate,
+    exitISO: todayISODateString(),
     shares: totalSharesSold,
     totalRisk,
     actualRiskPct,
@@ -2495,11 +2947,6 @@ async function sellPositionByTicker(ticker) {
   state.history.unshift(historyItem);
   const currentIndex = state.activeTrades.findIndex(t => t.ticker === ticker);
   if (currentIndex !== -1) state.activeTrades.splice(currentIndex, 1);
-
-  // Offer to update account value by P&L
-  if (await appConfirm(`Trade logged. Adjust Account Value by the P&L of Rs. ${formatNPR(pnl)}?`)) {
-    state.accountValue += pnl;
-  }
 
   saveState();
 
