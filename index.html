@@ -121,15 +121,7 @@
         <input type="file" id="index-bars-file-input" accept=".csv,text/csv" style="display:none;" />
         <button id="index-bars-clear-btn" class="btn btn-text">Clear History</button>
       </div>
-      <div class="input-group" style="margin-top:0.8rem;">
-        <label for="session-closures-input">Manual NEPSE closures / overrides (YYYY-MM-DD)</label>
-        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-          <input id="session-closures-input" type="text" placeholder="2026-10-21, 2026-10-22" style="flex:1; min-width:16rem;" />
-          <button id="session-closures-save-btn" type="button" class="btn btn-secondary">Save Calendar</button>
-        </div>
-        <small class="form-help">Weekends and published NEPSE holidays are loaded automatically. Add only ad-hoc closures from the latest NEPSE session notice; these dates are included in pending-order and catch-up checks.</small>
-        <small id="session-calendar-status" class="form-help" role="status">Loading the published NEPSE holiday calendar…</small>
-      </div>
+      <small id="session-calendar-status" class="form-help" role="status" style="display:block; margin-top:0.8rem;">Loading the published NEPSE holiday calendar…</small>
       <div id="macro-status-text" class="macro-status-text halted" style="margin-top: 0.9rem;">
         <i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count. New entries are blocked until enough history is available.
       </div>
