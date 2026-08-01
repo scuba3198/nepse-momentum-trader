@@ -28,6 +28,12 @@ const SCREENER_TOP5_VCP_THRESHOLD = 75;
 // resets to 'top5' on reload, matching the app's default actionable view.
 let screenerFilterMode = 'top5'; // 'top5' | 'passing' | 'failing' | 'all'
 
+// Published NEPSE holidays are synced into holidays.json by the scheduled
+// workflow. Keep manual closures separate so an ad-hoc notice can be added
+// without being overwritten on the next sync.
+let automaticHolidayDates = new Set();
+let holidayCalendarReady = false;
+
 // Application State
 let state = {
   accountValue: DEFAULT_ACCOUNT_VALUE,
@@ -37,7 +43,7 @@ let state = {
   cashBalance: DEFAULT_ACCOUNT_VALUE,
   realizedPnl: 0,
   indexBars: [],            // Step 0: Distribution Day Counter — { date, close, volume }, ascending
-  closedDates: [],          // User-maintained exchange closures/holidays, YYYY-MM-DD
+  closedDates: [],          // User-maintained ad-hoc closures/overrides, YYYY-MM-DD
   pendingOrders: [],        // Step 4: GTC Limit Orders awaiting fill
   activeTrades: [],
   history: [],
@@ -62,6 +68,7 @@ const elements = {
   indexBarsClearBtn: document.getElementById('index-bars-clear-btn'),
   sessionClosuresInput: document.getElementById('session-closures-input'),
   sessionClosuresSaveBtn: document.getElementById('session-closures-save-btn'),
+  sessionCalendarStatus: document.getElementById('session-calendar-status'),
   macroStatusText: document.getElementById('macro-status-text'),
   distributionDaysList: document.getElementById('distribution-days-list'),
   haltBanner: document.getElementById('halt-banner'),
@@ -699,6 +706,47 @@ function loadState() {
   }
 }
 
+// The GitHub Action publishes a small, same-origin JSON file so the static
+// GitHub Pages app does not need to call NEPSE's protected cross-origin API.
+// A failed sync must never erase manual closures or prevent the app from
+// working offline, so the manual list remains the fallback.
+async function loadPublishedHolidayCalendar() {
+  const status = elements.sessionCalendarStatus;
+  if (status) status.textContent = 'Loading the published NEPSE holiday calendar…';
+
+  try {
+    const response = await fetch(`holidays.json?v=${Date.now()}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const payload = await response.json();
+    const rawHolidays = Array.isArray(payload)
+      ? payload
+      : (payload && Array.isArray(payload.holidays) ? payload.holidays : []);
+    const dates = Array.from(new Set(rawHolidays
+      .map(item => typeof item === 'string' ? item : item && (item.date || item.holidayDate))
+      .map(validISODate)
+      .filter(Boolean))).sort();
+
+    if (dates.length === 0) throw new Error('the synced file contained no valid holiday dates');
+
+    automaticHolidayDates = new Set(dates);
+    if (status) {
+      status.textContent = `Published NEPSE holidays loaded automatically (${dates.length} date${dates.length === 1 ? '' : 's'}). Add only ad-hoc closures below.`;
+      status.style.color = '';
+    }
+  } catch (error) {
+    automaticHolidayDates = new Set();
+    if (status) {
+      status.textContent = 'Automatic holiday sync is unavailable; manual closure dates are still active.';
+      status.style.color = 'var(--color-accent)';
+    }
+    console.warn('Failed to load the published NEPSE holiday calendar:', error);
+  } finally {
+    holidayCalendarReady = true;
+    renderAll();
+  }
+}
+
 // --------------------------------------------------------------------------
 // Hero splash — ASCII-density "chart mountain", built the same way a photo
 // gets turned into a halftone: draw a shape to an offscreen canvas, sample
@@ -832,6 +880,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   setupEventListeners();
   renderAll();
+  loadPublishedHolidayCalendar();
   initHeroSplash();
 });
 
@@ -1090,6 +1139,11 @@ function setupEventListeners() {
     const atr = parseFloat(elements.calcAtr.value);
 
     if (!ticker || isNaN(entry) || isNaN(atr)) return;
+
+    if (!holidayCalendarReady) {
+      await appAlert('The NEPSE holiday calendar is still loading. Please try again in a moment.');
+      return;
+    }
 
     // Hard gate: block new entries outright while the trailing distribution-day
     // count is severe ("Under Distribution"). Existing positions/orders are
@@ -1674,8 +1728,10 @@ function calculatePosition() {
     }
 
     // Only enable placing the GTC order if macro filter passes AND slots are available AND
-    // cash is sufficient AND the position clears the practical minimum lot size
-    elements.executeTradeBtn.disabled = !macroOk || !slotsAvailable || !cashOk || belowMinLot;
+    // cash is sufficient AND the position clears the practical minimum lot size.
+    // Wait for the automatic holiday calendar to settle so a page-load race
+    // cannot allow an order on a published NEPSE holiday.
+    elements.executeTradeBtn.disabled = !holidayCalendarReady || !macroOk || !slotsAvailable || !cashOk || belowMinLot;
   } else {
     elements.resPositionSize.textContent = '0 Shares (Risk per share too high)';
     elements.resPositionSize.style.color = '';
@@ -2502,9 +2558,10 @@ function renderDailyRoutineDropdown() {
 // --------------------------------------------------------------------------
 // Catch-Up Reminder: flags active trades whose close/ATR log has fallen
 // behind, and lets you backfill the missed NEPSE trading days.
-// Weekdays are the fallback.  `state.closedDates` is the exchange-calendar
-// override for public holidays and ad-hoc NEPSE closures, and uploaded index
-// bars provide the authoritative session set for dates covered by that file.
+// Weekdays are the fallback. The synced published holiday set and
+// `state.closedDates` manual overrides cover non-weekend closures, while
+// uploaded index bars provide the authoritative session set for dates covered
+// by that file.
 // --------------------------------------------------------------------------
 
 const NEPSE_TRADING_WEEKDAYS = [1, 2, 3, 4, 5]; // Mon=1 ... Fri=5 (Sat/Sun are non-trading)
@@ -2514,6 +2571,7 @@ function isNepseTradingDay(date, options = {}) {
   if (!NEPSE_TRADING_WEEKDAYS.includes(date.getDay())) return false;
 
   const iso = toISODateString(date);
+  if (automaticHolidayDates.has(iso)) return false;
   if (Array.isArray(state.closedDates) && state.closedDates.includes(iso)) return false;
 
   // For historical catch-up, an uploaded index series is better evidence than

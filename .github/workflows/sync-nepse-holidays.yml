@@ -1,0 +1,36 @@
+name: Sync NEPSE holidays
+
+on:
+  schedule:
+    - cron: '17 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the app
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch the NEPSE holiday listing
+        run: node scripts/sync-holidays.mjs
+
+      - name: Commit changed holiday data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add holidays.json
+          if git diff --cached --quiet; then
+            echo "Holiday calendar unchanged."
+            exit 0
+          fi
+          git commit -m "chore: sync NEPSE holiday calendar"
+          git push
