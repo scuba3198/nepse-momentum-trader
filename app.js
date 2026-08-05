@@ -2475,7 +2475,7 @@ function renderActiveTrades() {
 }
 
 // Shows every day the Daily Routine was submitted for a given ticker,
-// most recent first, using the existing app dialog (its message element
+// earliest date first, using the existing app dialog (its message element
 // preserves line breaks via white-space: pre-line).
 async function showUpdateLog(ticker) {
   const trade = findActiveTradeByTicker(ticker);
@@ -2494,7 +2494,14 @@ async function showUpdateLog(ticker) {
 
   const lines = log
     .slice()
-    .reverse()
+    .sort((a, b) => {
+      const aDate = parseISODateOnly(a.dateISO) || legacyParseDisplayDate(a.date);
+      const bDate = parseISODateOnly(b.dateISO) || legacyParseDisplayDate(b.date);
+      if (!aDate && !bDate) return 0;
+      if (!aDate) return 1;
+      if (!bDate) return -1;
+      return aDate - bDate;
+    })
     .map(e => `${e.date}  —  Close: Rs. ${formatNPR(e.close)}   ATR: ${e.atr.toFixed(2)}   Stop: Rs. ${formatNPR(e.trailingStop)}`)
     .join('\n');
 
