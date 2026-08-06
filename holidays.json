@@ -1,6 +1,6 @@
 {
   "source": "https://www.nepalstock.com.np/holiday-listing",
-  "syncedAt": "2026-08-01T00:12:15.205Z",
+  "syncedAt": "2026-08-06T03:34:42.616Z",
   "holidays": [
     {
       "date": "2007-03-27",
@@ -9793,6 +9793,14 @@
     {
       "date": "2026-05-29",
       "description": "Republic Day"
+    },
+    {
+      "date": "2026-08-28",
+      "description": "Janai Purnima"
+    },
+    {
+      "date": "2026-09-04",
+      "description": "Shree Krishna Janmasthami"
     }
   ]
 }
