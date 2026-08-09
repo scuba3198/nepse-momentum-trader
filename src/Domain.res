@@ -86,7 +86,7 @@ type historyItem = {
   exitReason: string,
 }
 
-/* App.res intentionally keeps these two collections JSON-shaped while the
+/* App.res intentionally keeps these two collections JSON-shaped while the
  * persistence core decodes each element into typed records. */
 type state = {
   accountValue: float,
@@ -992,7 +992,7 @@ let summarizeExit = (
   }
 }
 
-/* Build the single history row emitted when a position's final tranche is
+/* Build the single history row emitted when a position's final tranche is
  * sold.  Cumulative sold fields make partial exits deterministic and retain
  * the original VWAP/cost ledger. */
 let historyFromClosedTrade = (~trade: trade, ~exitDateISO: string, ~exitReason: string): option<

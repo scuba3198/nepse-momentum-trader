@@ -1,4 +1,4 @@
-/* Pure state transitions. Browser event handlers can keep these records and
+/* Pure state transitions. Browser event handlers can keep these records and
  * never mutate a persisted order/trade in place. */
 open RescriptCore
 

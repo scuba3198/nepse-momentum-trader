@@ -1,4 +1,4 @@
-/* Versioned persistence primitives.  Browser adapters can keep their
+/* Versioned persistence primitives.  Browser adapters can keep their
  * localStorage calls at the edge and use these pure plans/results. */
 open RescriptCore
 
@@ -186,7 +186,7 @@ let loadFromRecords = (values: records): loadResult => {
 let loadFromValues = loadFromRecords
 let load = loadFromRecords
 
-/* A save always writes the new primary key.  An existing valid primary is
+/* A save always writes the new primary key.  An existing valid primary is
  * copied to the rolling backup.  The recovery slot is deliberately untouched
  * once present, so a failed migration can always be retried. */
 let planWrite = (~values: records, ~state: Domain.state): writePlan => {
