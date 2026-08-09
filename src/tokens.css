@@ -1,0 +1,2 @@
+:root { --ink: #0b1117; --panel: #111b23; --panel-2: #16232c; --input: #0d171f; --text: #edf4eb; --muted: #91a19b; --line: #29403b; --signal: #b9ef61; --amber: #e4b55f; --danger: #f07d74; }
+[data-theme="light"] { --ink: #edf0e9; --panel: #f8faf5; --panel-2: #edf2e9; --input: #fff; --text: #16211c; --muted: #5f7067; --line: #cedbd0; --signal: #317c4a; --amber: #9a670e; --danger: #b43932; }

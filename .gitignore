@@ -10,6 +10,8 @@ dist/
 build/
 coverage/
 .cache/
+playwright-report/
+test-results/
 
 # Local configuration and secrets
 .env
@@ -27,3 +29,8 @@ coverage/
 Thumbs.db
 *.tmp
 *.temp
+
+# ReScript generated artifacts
+lib/
+src/**/*.res.mjs
+src/**/*.res.js

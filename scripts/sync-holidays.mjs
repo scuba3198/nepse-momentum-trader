@@ -7,6 +7,7 @@ const API_ORIGIN = `${SITE_ORIGIN}/api`;
 const HOLIDAY_SOURCE = `${SITE_ORIGIN}/holiday-listing`;
 const OUTPUT_FILE = new URL('../holidays.json', import.meta.url);
 const REQUEST_HEADERS = { 'User-Agent': 'nepse-momentum-trader-holiday-sync/1.0' };
+const SCHEMA_VERSION = 1;
 
 async function fetchJson(url, headers = REQUEST_HEADERS) {
   const response = await fetch(url, { headers });
@@ -76,43 +77,97 @@ async function readPreviousCalendar() {
   }
 }
 
-const headers = await getPublicApiHeaders();
-const years = await fetchJson(`${API_ORIGIN}/nots/holiday/year`, headers);
-if (!Array.isArray(years) || years.length === 0) throw new Error('NEPSE returned no holiday-list years');
+function isValidSyncedAt(value) {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
+}
 
-const byDate = new Map();
-for (const year of years) {
-  const rows = await fetchJson(`${API_ORIGIN}/nots/holiday/list?year=${encodeURIComponent(year)}`, headers);
-  if (!Array.isArray(rows)) throw new Error(`NEPSE returned an invalid holiday list for ${year}`);
+function validateCalendar(calendar) {
+  if (!calendar || typeof calendar !== 'object' || Array.isArray(calendar)) {
+    throw new Error('holiday calendar must be an object');
+  }
 
-  for (const row of rows) {
-    const date = normalizeISODate(row && row.holidayDate);
-    if (!date) continue;
-    byDate.set(date, normalizeDescription(row.holidayDescription));
+  if (calendar.schemaVersion !== SCHEMA_VERSION) {
+    throw new Error(`holiday calendar schemaVersion must be ${SCHEMA_VERSION}`);
+  }
+
+  if (typeof calendar.source !== 'string' || calendar.source.length === 0) {
+    throw new Error('holiday calendar source must be a non-empty string');
+  }
+
+  if (!isValidSyncedAt(calendar.syncedAt)) {
+    throw new Error('holiday calendar syncedAt must be an ISO timestamp');
+  }
+
+  if (!Array.isArray(calendar.holidays) || calendar.holidays.length === 0) {
+    throw new Error('holiday calendar must contain at least one holiday');
+  }
+
+  let previousDate = '';
+  for (const holiday of calendar.holidays) {
+    if (!holiday || typeof holiday !== 'object' || Array.isArray(holiday)) {
+      throw new Error('holiday entries must be objects');
+    }
+    if (!normalizeISODate(holiday.date)) {
+      throw new Error(`holiday entry has an invalid date: ${holiday.date}`);
+    }
+    if (typeof holiday.description !== 'string') {
+      throw new Error(`holiday entry ${holiday.date} has an invalid description`);
+    }
+    if (holiday.date <= previousDate) {
+      throw new Error('holiday entries must be unique and sorted by date');
+    }
+    previousDate = holiday.date;
   }
 }
 
-const holidays = Array.from(byDate, ([date, description]) => ({ date, description }))
-  .sort((a, b) => a.date.localeCompare(b.date));
-if (holidays.length === 0) throw new Error('NEPSE returned no valid holiday dates');
+async function syncCalendar() {
+  // Read before any network work. This script writes only after a fully
+  // validated replacement is available, so a failed sync preserves this file.
+  const previous = await readPreviousCalendar();
+  const headers = await getPublicApiHeaders();
+  const years = await fetchJson(`${API_ORIGIN}/nots/holiday/year`, headers);
+  if (!Array.isArray(years) || years.length === 0) throw new Error('NEPSE returned no holiday-list years');
 
-const previous = await readPreviousCalendar();
-const previousHolidays = previous && Array.isArray(previous.holidays) ? previous.holidays : null;
-const sameData = JSON.stringify(previousHolidays) === JSON.stringify(holidays);
-const syncedAt = sameData && typeof previous.syncedAt === 'string'
-  ? previous.syncedAt
-  : new Date().toISOString();
-const output = {
-  source: HOLIDAY_SOURCE,
-  syncedAt,
-  holidays
-};
-const serialized = `${JSON.stringify(output, null, 2)}\n`;
-const previousSerialized = previous ? `${JSON.stringify(previous, null, 2)}\n` : '';
+  const byDate = new Map();
+  for (const year of years) {
+    const rows = await fetchJson(`${API_ORIGIN}/nots/holiday/list?year=${encodeURIComponent(year)}`, headers);
+    if (!Array.isArray(rows)) throw new Error(`NEPSE returned an invalid holiday list for ${year}`);
 
-if (serialized !== previousSerialized) {
-  await writeFile(OUTPUT_FILE, serialized, 'utf8');
-  console.log(`Updated ${holidays.length} NEPSE holiday dates across ${years.length} published years.`);
-} else {
-  console.log(`NEPSE holiday calendar is unchanged (${holidays.length} dates).`);
+    for (const row of rows) {
+      const date = normalizeISODate(row && row.holidayDate);
+      if (!date) continue;
+      byDate.set(date, normalizeDescription(row.holidayDescription));
+    }
+  }
+
+  const holidays = Array.from(byDate, ([date, description]) => ({ date, description }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (holidays.length === 0) throw new Error('NEPSE returned no valid holiday dates');
+
+  const previousHolidays = previous && Array.isArray(previous.holidays) ? previous.holidays : null;
+  const sameData = JSON.stringify(previousHolidays) === JSON.stringify(holidays);
+  const syncedAt = sameData && previous && previous.schemaVersion === SCHEMA_VERSION && isValidSyncedAt(previous.syncedAt)
+    ? previous.syncedAt
+    : new Date().toISOString();
+  const output = {
+    schemaVersion: SCHEMA_VERSION,
+    source: HOLIDAY_SOURCE,
+    syncedAt,
+    holidays
+  };
+  validateCalendar(output);
+
+  const serialized = `${JSON.stringify(output, null, 2)}\n`;
+  const previousSerialized = previous ? `${JSON.stringify(previous, null, 2)}\n` : '';
+  if (serialized !== previousSerialized) {
+    await writeFile(OUTPUT_FILE, serialized, 'utf8');
+    console.log(`Updated ${holidays.length} NEPSE holiday dates across ${years.length} published years.`);
+  } else {
+    console.log(`NEPSE holiday calendar is unchanged (${holidays.length} dates).`);
+  }
 }
+
+syncCalendar().catch((error) => {
+  console.error(`NEPSE holiday sync failed; the existing calendar was left unchanged: ${error.message}`);
+  process.exitCode = 1;
+});
