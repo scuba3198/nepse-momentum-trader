@@ -2612,9 +2612,12 @@ function renderActiveTrades() {
             : `<span class="status-check"><i class="fa-solid fa-circle-check"></i> Holding Pattern</span>`
           }
         </span>
-        <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
           <button class="btn btn-secondary view-log-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-ticker="${escapeHTML(trade.ticker)}">
             <i class="fa-solid fa-calendar-days"></i> Update Log${trade.updateLog && trade.updateLog.length ? ` (${trade.updateLog.length})` : ''}
+          </button>
+          <button class="btn btn-secondary correct-log-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-ticker="${escapeHTML(trade.ticker)}">
+            <i class="fa-solid fa-pen"></i> Correct Log
           </button>
           <button class="btn btn-secondary ${isExitRequired ? 'btn-danger-action' : ''}" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
             <i class="fa-solid fa-arrow-right-from-bracket"></i> Sell Position
@@ -2626,6 +2629,11 @@ function renderActiveTrades() {
     card.querySelector('.view-log-btn').addEventListener('click', (e) => {
       const t = e.currentTarget.getAttribute('data-ticker');
       showUpdateLog(t);
+    });
+
+    card.querySelector('.correct-log-btn').addEventListener('click', (e) => {
+      const t = e.currentTarget.getAttribute('data-ticker');
+      correctUpdateLog(t);
     });
 
     card.querySelector('[data-index]').addEventListener('click', (e) => {
@@ -2669,6 +2677,54 @@ async function showUpdateLog(ticker) {
     .join('\n');
 
   await appAlert(`${lines}`, `${ticker} — Update Log (${log.length})`);
+}
+
+async function correctUpdateLog(ticker) {
+  const trade = findActiveTradeByTicker(ticker);
+  const log = Array.isArray(trade?.updateLog)
+    ? trade.updateLog.slice().sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+    : [];
+  if (log.length === 0) {
+    await appAlert(`No Daily Routine updates are available to correct for ${ticker}.`);
+    return;
+  }
+
+  const choice = await appPrompt(
+    `Enter the row number to correct:\n\n${log.map((entry, i) =>
+      `${i + 1}. ${entry.date} — Close: Rs. ${formatNPR(entry.close)}, ATR: ${entry.atr.toFixed(2)}`
+    ).join('\n')}`,
+    String(log.length),
+    `${ticker} — Correct Past Entry`
+  );
+  if (choice === null) return;
+
+  const row = Number(choice);
+  if (!Number.isInteger(row) || row < 1 || row > log.length) {
+    await appAlert('Enter one of the row numbers shown. No changes were saved.');
+    return;
+  }
+
+  const entry = log[row - 1];
+  const closeInput = await appPrompt(`Closing price for ${entry.date}:`, entry.close.toFixed(2), `${ticker} — Correct Past Entry`);
+  if (closeInput === null) return;
+  const atrInput = await appPrompt(`ATR(14) for ${entry.date}:`, entry.atr.toFixed(2), `${ticker} — Correct Past Entry`);
+  if (atrInput === null) return;
+
+  const close = Number(closeInput);
+  const atr = Number(atrInput);
+  if (!isFinite(close) || close <= 0 || !isFinite(atr) || atr <= 0 || atr >= close) {
+    await appAlert('Enter a valid close and an ATR greater than zero but lower than the close. No changes were saved.');
+    return;
+  }
+
+  applyDailyUpdate(trade, entry.dateISO, close, atr);
+  saveState();
+  renderAll();
+  const corrected = trade.updateLog.find(item => item.dateISO === entry.dateISO);
+  await appAlert(
+    `${entry.date} was corrected. Its stop is now Rs. ${formatNPR(corrected.trailingStop)}; all later stops were recalculated.`,
+    `${ticker} — Correction Saved`
+  );
 }
 
 function renderDailyRoutineDropdown() {
