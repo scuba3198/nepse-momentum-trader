@@ -40,7 +40,7 @@ function loadApp() {
 
 const api = loadApp();
 
-// A ticker is counted once per calendar day only when it ranks in Top 5.
+// A confirmed session can count once per day; unconfirmed sessions cannot.
 {
   api.setState({ screenerTop5Hits: { EXISTING: 2 } });
   const hits = api.getState().screenerTop5Hits;
@@ -51,15 +51,20 @@ const api = loadApp();
     { ticker: 'D', tt: 100, rs: 96, vcp: 80 },
     { ticker: 'E', tt: 100, rs: 95, vcp: 80 },
     { ticker: 'OUTSIDE', tt: 100, rs: 94, vcp: 80 }
-  ], '2026-01-03'); // Saturday
+  ], '2026-01-02', true);
   assert.equal(recorded, 5);
   assert.equal(hits.A, 1);
   assert.equal(hits.E, 1);
   assert.equal(hits.OUTSIDE, undefined);
   assert.equal(hits.EXISTING, 2);
-  assert.equal(api.recordScreenerTop5Hits([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-03'), 0);
+  assert.equal(api.recordScreenerTop5Hits([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-02', true), 0);
+  assert.equal(api.recordScreenerTop5Hits([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-03', false), 0);
   assert.equal(hits.A, 1);
-  assert.equal(api.getState().screenerTop5HitDate, '2026-01-03');
+  assert.equal(api.getState().screenerTop5HitDate, '2026-01-02');
+  const restored = api.normalizePersistedState({ screenerSessionAnswers: { '2026-01-02': true, '2026-01-03': false, invalid: true } });
+  assert.equal(restored.state.screenerSessionAnswers['2026-01-02'], true);
+  assert.equal(restored.state.screenerSessionAnswers['2026-01-03'], false);
+  assert.equal(restored.state.screenerSessionAnswers.invalid, undefined);
 }
 
 // A pending order's prior stop remains the replay floor on fill-day conversion.

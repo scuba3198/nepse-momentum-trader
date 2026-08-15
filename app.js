@@ -62,7 +62,8 @@ let state = {
   history: [],
   screenerCandidates: [],   // Step 01: { ticker, tt, rs, vcp }
   screenerTop5Hits: {},     // { ticker: number of pasted snapshots ranked in Top 5 }
-  screenerTop5HitDate: ''   // ISO date of the snapshot already counted today
+  screenerTop5HitDate: '',  // ISO date of the snapshot already counted today
+  screenerSessionAnswers: {} // { ISO date: manually confirmed market-open status }
 };
 
 // DOM Elements
@@ -681,6 +682,12 @@ function normalizePersistedState(rawState) {
     });
   }
   const screenerTop5HitDate = validISODate(raw.screenerTop5HitDate) || '';
+  const screenerSessionAnswers = {};
+  if (raw.screenerSessionAnswers && typeof raw.screenerSessionAnswers === 'object' && !Array.isArray(raw.screenerSessionAnswers)) {
+    Object.entries(raw.screenerSessionAnswers).forEach(([date, answer]) => {
+      if (validISODate(date) && typeof answer === 'boolean') screenerSessionAnswers[date] = answer;
+    });
+  }
 
   // An imported ticker must not exist in both collections. Active positions
   // win deterministically because they represent already-owned shares; the
@@ -717,7 +724,8 @@ function normalizePersistedState(rawState) {
       history,
       screenerCandidates,
       screenerTop5Hits,
-      screenerTop5HitDate
+      screenerTop5HitDate,
+      screenerSessionAnswers
     },
     dropped: {
       pendingOrders: rawPending.length - pendingOrders.length + duplicatePending,
@@ -1236,7 +1244,8 @@ function setupEventListeners() {
           history: [],
           screenerCandidates: [],
           screenerTop5Hits: {},
-          screenerTop5HitDate: ''
+          screenerTop5HitDate: '',
+          screenerSessionAnswers: {}
         };
         elements.calcTicker.value = '';
         elements.calcEntry.value = '';
@@ -1983,7 +1992,7 @@ function parsePastedScreenerText(text) {
   return { results, skipped };
 }
 
-function bulkAddScreenerCandidates() {
+async function bulkAddScreenerCandidates() {
   const raw = elements.screenerBulkPaste.value;
   if (!raw || !raw.trim()) {
     appAlert('Paste some screener rows first.');
@@ -2003,7 +2012,8 @@ function bulkAddScreenerCandidates() {
   state.screenerCandidates = results;
   const hitDate = todayISODateString();
   const top5AlreadyRecorded = state.screenerTop5HitDate === hitDate;
-  const top5HitCount = recordScreenerTop5Hits(results, hitDate);
+  const marketOpenToday = await confirmScreenerMarketOpen(hitDate);
+  const top5HitCount = recordScreenerTop5Hits(results, hitDate, marketOpenToday);
 
   elements.screenerBulkPaste.value = '';
   saveState();
@@ -2011,7 +2021,10 @@ function bulkAddScreenerCandidates() {
   const skippedNote = skipped.length > 0
     ? `\n\n${skipped.length} row(s) skipped (headers or malformed): ${skipped.slice(0, 3).join(' | ')}${skipped.length > 3 ? '…' : ''}`
     : '';
-  appAlert(`Shortlist replaced with ${results.length} candidate(s). ${top5AlreadyRecorded ? 'Top 5 hits were already recorded today.' : `${top5HitCount} Top 5 hit(s) recorded.`}${skippedNote}`);
+  const hitStatus = !marketOpenToday
+    ? (!holidayCalendarReady ? 'The NEPSE calendar is still loading; Top 5 hits were not recorded.' : 'NEPSE was not confirmed open today; Top 5 hits were not recorded.')
+    : top5AlreadyRecorded ? 'Top 5 hits were already recorded today.' : `${top5HitCount} Top 5 hit(s) recorded.`;
+  appAlert(`Shortlist replaced with ${results.length} candidate(s). ${hitStatus}${skippedNote}`);
 }
 
 function removeScreenerCandidate(ticker) {
@@ -2033,11 +2046,29 @@ function getTop5ScreenerCandidates(candidates) {
     .slice(0, SCREENER_TOP_N);
 }
 
-// Only the first valid snapshot per calendar day can add hits. This is a
-// watch-list metric only; it intentionally does not authorize a trade.
-function recordScreenerTop5Hits(candidates, dateISO = todayISODateString()) {
+async function confirmScreenerMarketOpen(dateISO) {
+  const snapshotDate = parseISODateOnly(dateISO);
+  if (!snapshotDate || !NEPSE_TRADING_WEEKDAYS.includes(snapshotDate.getDay())) return false;
+  if (holidayCalendarReady && holidayCalendarAvailable) return isNepseTradingDay(snapshotDate);
+  if (!holidayCalendarReady) return false;
+
+  if (!state.screenerSessionAnswers || typeof state.screenerSessionAnswers !== 'object') state.screenerSessionAnswers = {};
+  if (Object.prototype.hasOwnProperty.call(state.screenerSessionAnswers, dateISO)) return state.screenerSessionAnswers[dateISO];
+
+  const didOpen = await appConfirm(
+    `The automatic NEPSE holiday calendar is unavailable. Did NEPSE open on ${displayDateFromISO(dateISO)}? Select OK only if it traded.`,
+    'Confirm NEPSE Session'
+  );
+  state.screenerSessionAnswers[dateISO] = didOpen;
+  return didOpen;
+}
+
+// Only the first valid snapshot on a confirmed NEPSE session can add hits.
+// This is a watch-list metric only; it intentionally does not authorize a trade.
+function recordScreenerTop5Hits(candidates, dateISO = todayISODateString(), marketOpen = false) {
   if (!state.screenerTop5Hits || typeof state.screenerTop5Hits !== 'object') state.screenerTop5Hits = {};
-  if (!validISODate(dateISO) || state.screenerTop5HitDate === dateISO) return 0;
+  const snapshotDate = parseISODateOnly(dateISO);
+  if (!snapshotDate || !marketOpen || state.screenerTop5HitDate === dateISO) return 0;
   state.screenerTop5HitDate = dateISO;
   const tickers = new Set(getTop5ScreenerCandidates(candidates).map(candidate => candidate.ticker));
   tickers.forEach(ticker => {
