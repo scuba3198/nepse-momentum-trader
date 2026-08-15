@@ -754,7 +754,9 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 .header-action-btns { display: flex; align-items: center; gap: 0.2rem; margin-left: 0.5rem; }
 .header-icon-btn { background: none; border: 1px solid transparent; color: var(--paper-faint); cursor: pointer; padding: 0.3rem 0.4rem; border-radius: var(--r-sm); font-size: 0.82rem; transition: all var(--ease); line-height: 1; }
 .header-icon-btn:hover { color: var(--paper); background: var(--tint-d); border-color: var(--line); }
-.header-icon-btn.danger-icon:hover { color: var(--halt); background: var(--halt-dim); border-color: rgba(255,92,77,0.3); }
+.header-text-btn { background: none; border: 1px solid transparent; color: var(--paper-dim); cursor: pointer; padding: 0.3rem 0.5rem; border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.02em; transition: all var(--ease); }
+.header-text-btn:hover { color: var(--paper); background: var(--tint-d); border-color: var(--line); }
+.header-text-btn.danger-icon:hover { color: var(--halt); background: var(--halt-dim); border-color: rgba(255,92,77,0.3); }
 
 .btn-override { background: var(--caution-dim); border: 1px solid rgba(181,115,10,0.4); color: var(--caution); }
 .btn-override:hover { background: rgba(181,115,10,0.16); border-color: rgba(181,115,10,0.6); color: #8A5808; }
