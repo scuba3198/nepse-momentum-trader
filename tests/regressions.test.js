@@ -32,7 +32,7 @@ function loadApp() {
   vm.runInContext(`this.api = {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
-    summarizeExitAccounting, recordScreenerTop5Hits,
+    summarizeExitAccounting, recordScreenerTop5Streaks,
     setState: value => { state = value; }, getState: () => state
   };`, context);
   return context.api;
@@ -40,11 +40,11 @@ function loadApp() {
 
 const api = loadApp();
 
-// A confirmed session can count once per day; unconfirmed sessions cannot.
+// Top 5 streaks advance only across consecutive confirmed market sessions.
 {
-  api.setState({ screenerTop5Hits: { EXISTING: 2 } });
-  const hits = api.getState().screenerTop5Hits;
-  const recorded = api.recordScreenerTop5Hits([
+  api.setState({ screenerTop5Streaks: {}, screenerTop5StreakDate: '' });
+  const streaks = api.getState().screenerTop5Streaks;
+  const recorded = api.recordScreenerTop5Streaks([
     { ticker: 'A', tt: 100, rs: 99, vcp: 80 },
     { ticker: 'B', tt: 100, rs: 98, vcp: 80 },
     { ticker: 'C', tt: 100, rs: 97, vcp: 80 },
@@ -53,15 +53,31 @@ const api = loadApp();
     { ticker: 'OUTSIDE', tt: 100, rs: 94, vcp: 80 }
   ], '2026-01-02', true);
   assert.equal(recorded, 5);
-  assert.equal(hits.A, 1);
-  assert.equal(hits.E, 1);
-  assert.equal(hits.OUTSIDE, undefined);
-  assert.equal(hits.EXISTING, 2);
-  assert.equal(api.recordScreenerTop5Hits([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-02', true), 0);
-  assert.equal(api.recordScreenerTop5Hits([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-03', false), 0);
-  assert.equal(hits.A, 1);
-  assert.equal(api.getState().screenerTop5HitDate, '2026-01-02');
-  const restored = api.normalizePersistedState({ screenerSessionAnswers: { '2026-01-02': true, '2026-01-03': false, invalid: true } });
+  assert.equal(streaks.A, 1);
+  assert.equal(streaks.OUTSIDE, undefined);
+  api.recordScreenerTop5Streaks([
+    { ticker: 'A', tt: 100, rs: 99, vcp: 80 },
+    { ticker: 'C', tt: 100, rs: 97, vcp: 80 },
+    { ticker: 'E', tt: 100, rs: 95, vcp: 80 },
+    { ticker: 'F', tt: 100, rs: 94, vcp: 80 },
+    { ticker: 'G', tt: 100, rs: 93, vcp: 80 }
+  ], '2026-01-05', true); // Monday follows Friday
+  assert.equal(streaks.A, 2);
+  assert.equal(streaks.C, 2);
+  assert.equal(streaks.B, undefined);
+  assert.equal(streaks.F, 1);
+  assert.equal(api.recordScreenerTop5Streaks([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-05', true), 0);
+  api.recordScreenerTop5Streaks([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-07', true); // Tuesday was missed
+  assert.equal(api.getState().screenerTop5Streaks.A, 1);
+  assert.equal(api.recordScreenerTop5Streaks([{ ticker: 'A', tt: 100, rs: 99, vcp: 80 }], '2026-01-08', false), 0);
+  assert.equal(api.getState().screenerTop5StreakDate, '2026-01-07');
+  const restored = api.normalizePersistedState({
+    screenerTop5Hits: { LEGACY: 9 },
+    screenerTop5Streaks: { A: 2 },
+    screenerSessionAnswers: { '2026-01-02': true, '2026-01-03': false, invalid: true }
+  });
+  assert.equal(restored.state.screenerTop5Streaks.A, 2);
+  assert.equal(restored.state.screenerTop5Streaks.LEGACY, undefined);
   assert.equal(restored.state.screenerSessionAnswers['2026-01-02'], true);
   assert.equal(restored.state.screenerSessionAnswers['2026-01-03'], false);
   assert.equal(restored.state.screenerSessionAnswers.invalid, undefined);

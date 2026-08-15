@@ -61,8 +61,8 @@ let state = {
   activeTrades: [],
   history: [],
   screenerCandidates: [],   // Step 01: { ticker, tt, rs, vcp }
-  screenerTop5Hits: {},     // { ticker: number of pasted snapshots ranked in Top 5 }
-  screenerTop5HitDate: '',  // ISO date of the snapshot already counted today
+  screenerTop5Streaks: {},  // { ticker: consecutive confirmed Top 5 sessions }
+  screenerTop5StreakDate: '', // ISO date of the last confirmed screener session
   screenerSessionAnswers: {} // { ISO date: manually confirmed market-open status }
 };
 
@@ -673,15 +673,15 @@ function normalizePersistedState(rawState) {
           vcp: sanitizeNumber(candidate.vcp, 0)
         }))
     : [];
-  const screenerTop5Hits = {};
-  if (raw.screenerTop5Hits && typeof raw.screenerTop5Hits === 'object' && !Array.isArray(raw.screenerTop5Hits)) {
-    Object.entries(raw.screenerTop5Hits).forEach(([rawTicker, rawHits]) => {
+  const screenerTop5Streaks = {};
+  if (raw.screenerTop5Streaks && typeof raw.screenerTop5Streaks === 'object' && !Array.isArray(raw.screenerTop5Streaks)) {
+    Object.entries(raw.screenerTop5Streaks).forEach(([rawTicker, rawHits]) => {
       const ticker = normalizeTicker(rawTicker);
       const hits = Math.floor(sanitizeNumber(rawHits, 0));
-      if (ticker && hits > 0) screenerTop5Hits[ticker] = (screenerTop5Hits[ticker] || 0) + hits;
+      if (ticker && hits > 0) screenerTop5Streaks[ticker] = hits;
     });
   }
-  const screenerTop5HitDate = validISODate(raw.screenerTop5HitDate) || '';
+  const screenerTop5StreakDate = validISODate(raw.screenerTop5StreakDate) || '';
   const screenerSessionAnswers = {};
   if (raw.screenerSessionAnswers && typeof raw.screenerSessionAnswers === 'object' && !Array.isArray(raw.screenerSessionAnswers)) {
     Object.entries(raw.screenerSessionAnswers).forEach(([date, answer]) => {
@@ -723,8 +723,8 @@ function normalizePersistedState(rawState) {
       activeTrades: dedupedActive,
       history,
       screenerCandidates,
-      screenerTop5Hits,
-      screenerTop5HitDate,
+      screenerTop5Streaks,
+      screenerTop5StreakDate,
       screenerSessionAnswers
     },
     dropped: {
@@ -1243,8 +1243,8 @@ function setupEventListeners() {
           activeTrades: [],
           history: [],
           screenerCandidates: [],
-          screenerTop5Hits: {},
-          screenerTop5HitDate: '',
+          screenerTop5Streaks: {},
+          screenerTop5StreakDate: '',
           screenerSessionAnswers: {}
         };
         elements.calcTicker.value = '';
@@ -2011,9 +2011,9 @@ async function bulkAddScreenerCandidates() {
   // full, current screener snapshot.
   state.screenerCandidates = results;
   const hitDate = todayISODateString();
-  const top5AlreadyRecorded = state.screenerTop5HitDate === hitDate;
+  const top5AlreadyRecorded = state.screenerTop5StreakDate === hitDate;
   const marketOpenToday = await confirmScreenerMarketOpen(hitDate);
-  const top5HitCount = recordScreenerTop5Hits(results, hitDate, marketOpenToday);
+  const top5HitCount = recordScreenerTop5Streaks(results, hitDate, marketOpenToday);
 
   elements.screenerBulkPaste.value = '';
   saveState();
@@ -2022,8 +2022,8 @@ async function bulkAddScreenerCandidates() {
     ? `\n\n${skipped.length} row(s) skipped (headers or malformed): ${skipped.slice(0, 3).join(' | ')}${skipped.length > 3 ? '…' : ''}`
     : '';
   const hitStatus = !marketOpenToday
-    ? (!holidayCalendarReady ? 'The NEPSE calendar is still loading; Top 5 hits were not recorded.' : 'NEPSE was not confirmed open today; Top 5 hits were not recorded.')
-    : top5AlreadyRecorded ? 'Top 5 hits were already recorded today.' : `${top5HitCount} Top 5 hit(s) recorded.`;
+    ? (!holidayCalendarReady ? 'The NEPSE calendar is still loading; Top 5 streaks were not updated.' : 'NEPSE was not confirmed open today; Top 5 streaks were not updated.')
+    : top5AlreadyRecorded ? 'Top 5 streaks were already updated today.' : `${top5HitCount} Top 5 streak(s) updated.`;
   appAlert(`Shortlist replaced with ${results.length} candidate(s). ${hitStatus}${skippedNote}`);
 }
 
@@ -2063,17 +2063,41 @@ async function confirmScreenerMarketOpen(dateISO) {
   return didOpen;
 }
 
-// Only the first valid snapshot on a confirmed NEPSE session can add hits.
-// This is a watch-list metric only; it intentionally does not authorize a trade.
-function recordScreenerTop5Hits(candidates, dateISO = todayISODateString(), marketOpen = false) {
-  if (!state.screenerTop5Hits || typeof state.screenerTop5Hits !== 'object') state.screenerTop5Hits = {};
+function hasUnbrokenScreenerStreak(previousDateISO, currentDateISO) {
+  const previousDate = parseISODateOnly(previousDateISO);
+  const currentDate = parseISODateOnly(currentDateISO);
+  if (!previousDate || !currentDate || previousDate >= currentDate) return false;
+
+  const cursor = new Date(previousDate);
+  cursor.setDate(cursor.getDate() + 1);
+  while (cursor < currentDate) {
+    // ponytail: an unavailable holiday calendar treats unknown weekdays as sessions, conservatively resetting a streak.
+    if (isNepseTradingDay(cursor)) return false;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return true;
+}
+
+// Only the first valid snapshot on a confirmed NEPSE session can update
+// streaks. A missed Top 5 appearance or market session resets the streak.
+function recordScreenerTop5Streaks(candidates, dateISO = todayISODateString(), marketOpen = false) {
+  if (!state.screenerTop5Streaks || typeof state.screenerTop5Streaks !== 'object') state.screenerTop5Streaks = {};
   const snapshotDate = parseISODateOnly(dateISO);
-  if (!snapshotDate || !marketOpen || state.screenerTop5HitDate === dateISO) return 0;
-  state.screenerTop5HitDate = dateISO;
+  if (!snapshotDate || !marketOpen || state.screenerTop5StreakDate === dateISO) return 0;
+
   const tickers = new Set(getTop5ScreenerCandidates(candidates).map(candidate => candidate.ticker));
+  const continues = hasUnbrokenScreenerStreak(state.screenerTop5StreakDate, dateISO);
+  if (!continues) {
+    Object.keys(state.screenerTop5Streaks).forEach(ticker => delete state.screenerTop5Streaks[ticker]);
+  } else {
+    Object.keys(state.screenerTop5Streaks).forEach(ticker => {
+      if (!tickers.has(ticker)) delete state.screenerTop5Streaks[ticker];
+    });
+  }
   tickers.forEach(ticker => {
-    state.screenerTop5Hits[ticker] = (state.screenerTop5Hits[ticker] || 0) + 1;
+    state.screenerTop5Streaks[ticker] = (state.screenerTop5Streaks[ticker] || 0) + 1;
   });
+  state.screenerTop5StreakDate = dateISO;
   return tickers.size;
 }
 
@@ -2156,13 +2180,14 @@ function renderScreenerTable() {
     shown.forEach((c) => {
       const passes = c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD;
       const vcpFlag = getVcpFlag(c.vcp);
+      const top5Streak = state.screenerTop5Streaks[c.ticker] || 0;
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><strong>${escapeHTML(c.ticker)}</strong></td>
         <td>${c.tt}</td>
         <td>${c.rs}</td>
         <td>${c.vcp}<span class="vcp-flag ${vcpFlag.cls}">${vcpFlag.label}</span></td>
-        <td>${state.screenerTop5Hits[c.ticker] || 0}</td>
+        <td class="${top5Streak >= 2 ? 'screener-streak-confirmed' : ''}">${top5Streak}</td>
         <td><span class="gate-badge ${passes ? 'pass' : 'fail'}">${passes ? 'PASS' : 'FAIL'}</span></td>
         <td>
           <div style="display:flex; gap:0.4rem; align-items:center; justify-content:flex-end;">

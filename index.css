@@ -542,6 +542,7 @@ textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.5; fo
 .vcp-flag.low { color: var(--halt); }
 .vcp-flag.mid { color: var(--caution); }
 .vcp-flag.high { color: var(--clear); }
+.screener-streak-confirmed { color: var(--clear); font-weight: 700; }
 
 .screener-row-remove { background: none; border: none; color: var(--paper-faint); cursor: pointer; font-size: 0.85rem; transition: color var(--ease); }
 .screener-row-remove:hover { color: var(--halt); }
