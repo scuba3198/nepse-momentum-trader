@@ -60,7 +60,9 @@ let state = {
   pendingOrders: [],        // Step 4: GTC Limit Orders awaiting fill
   activeTrades: [],
   history: [],
-  screenerCandidates: []    // Step 01: { ticker, tt, rs, vcp }
+  screenerCandidates: [],   // Step 01: { ticker, tt, rs, vcp }
+  screenerTop5Hits: {},     // { ticker: number of pasted snapshots ranked in Top 5 }
+  screenerTop5HitDate: ''   // ISO date of the snapshot already counted today
 };
 
 // DOM Elements
@@ -670,6 +672,15 @@ function normalizePersistedState(rawState) {
           vcp: sanitizeNumber(candidate.vcp, 0)
         }))
     : [];
+  const screenerTop5Hits = {};
+  if (raw.screenerTop5Hits && typeof raw.screenerTop5Hits === 'object' && !Array.isArray(raw.screenerTop5Hits)) {
+    Object.entries(raw.screenerTop5Hits).forEach(([rawTicker, rawHits]) => {
+      const ticker = normalizeTicker(rawTicker);
+      const hits = Math.floor(sanitizeNumber(rawHits, 0));
+      if (ticker && hits > 0) screenerTop5Hits[ticker] = (screenerTop5Hits[ticker] || 0) + hits;
+    });
+  }
+  const screenerTop5HitDate = validISODate(raw.screenerTop5HitDate) || '';
 
   // An imported ticker must not exist in both collections. Active positions
   // win deterministically because they represent already-owned shares; the
@@ -704,7 +715,9 @@ function normalizePersistedState(rawState) {
       pendingOrders: dedupedPending,
       activeTrades: dedupedActive,
       history,
-      screenerCandidates
+      screenerCandidates,
+      screenerTop5Hits,
+      screenerTop5HitDate
     },
     dropped: {
       pendingOrders: rawPending.length - pendingOrders.length + duplicatePending,
@@ -1221,7 +1234,9 @@ function setupEventListeners() {
           pendingOrders: [],
           activeTrades: [],
           history: [],
-          screenerCandidates: []
+          screenerCandidates: [],
+          screenerTop5Hits: {},
+          screenerTop5HitDate: ''
         };
         elements.calcTicker.value = '';
         elements.calcEntry.value = '';
@@ -1986,6 +2001,9 @@ function bulkAddScreenerCandidates() {
   // whatever was there before — each paste is treated as this session's
   // full, current screener snapshot.
   state.screenerCandidates = results;
+  const hitDate = todayISODateString();
+  const top5AlreadyRecorded = state.screenerTop5HitDate === hitDate;
+  const top5HitCount = recordScreenerTop5Hits(results, hitDate);
 
   elements.screenerBulkPaste.value = '';
   saveState();
@@ -1993,7 +2011,7 @@ function bulkAddScreenerCandidates() {
   const skippedNote = skipped.length > 0
     ? `\n\n${skipped.length} row(s) skipped (headers or malformed): ${skipped.slice(0, 3).join(' | ')}${skipped.length > 3 ? '…' : ''}`
     : '';
-  appAlert(`Shortlist replaced with ${results.length} candidate(s).${skippedNote}`);
+  appAlert(`Shortlist replaced with ${results.length} candidate(s). ${top5AlreadyRecorded ? 'Top 5 hits were already recorded today.' : `${top5HitCount} Top 5 hit(s) recorded.`}${skippedNote}`);
 }
 
 function removeScreenerCandidate(ticker) {
@@ -2006,6 +2024,26 @@ function useScreenerCandidate(ticker) {
   calculatePosition();
   elements.calcTicker.scrollIntoView({ behavior: 'smooth', block: 'center' });
   elements.calcEntry.focus();
+}
+
+function getTop5ScreenerCandidates(candidates) {
+  return candidates
+    .filter(c => c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD && c.rs >= SCREENER_TOP5_RS_THRESHOLD && c.vcp >= SCREENER_TOP5_VCP_THRESHOLD)
+    .sort((a, b) => (b.rs - a.rs) || (b.vcp - a.vcp))
+    .slice(0, SCREENER_TOP_N);
+}
+
+// Only the first valid snapshot per calendar day can add hits. This is a
+// watch-list metric only; it intentionally does not authorize a trade.
+function recordScreenerTop5Hits(candidates, dateISO = todayISODateString()) {
+  if (!state.screenerTop5Hits || typeof state.screenerTop5Hits !== 'object') state.screenerTop5Hits = {};
+  if (!validISODate(dateISO) || state.screenerTop5HitDate === dateISO) return 0;
+  state.screenerTop5HitDate = dateISO;
+  const tickers = new Set(getTop5ScreenerCandidates(candidates).map(candidate => candidate.ticker));
+  tickers.forEach(ticker => {
+    state.screenerTop5Hits[ticker] = (state.screenerTop5Hits[ticker] || 0) + 1;
+  });
+  return tickers.size;
 }
 
 // VCP Pattern Score isn't a gate or a primary rank — it's an entry-timing
@@ -2029,7 +2067,7 @@ function renderScreenerTable() {
   if (state.screenerCandidates.length === 0) {
     elements.screenerList.innerHTML = `
       <tr class="empty-row">
-        <td colspan="6">No candidates entered yet.</td>
+        <td colspan="7">No candidates entered yet.</td>
       </tr>
     `;
     elements.screenerSummary.textContent = '';
@@ -2054,7 +2092,7 @@ function renderScreenerTable() {
 
   if (screenerFilterMode === 'top5') {
     const top5Eligible = allPassers.filter(c => c.rs >= SCREENER_TOP5_RS_THRESHOLD && c.vcp >= SCREENER_TOP5_VCP_THRESHOLD);
-    shown = top5Eligible.slice(0, SCREENER_TOP_N);
+    shown = getTop5ScreenerCandidates(state.screenerCandidates);
     const hiddenEligibleCount = top5Eligible.length - shown.length;
     const belowTop5Count = allPassers.length - top5Eligible.length;
     const parts = [];
@@ -2080,7 +2118,7 @@ function renderScreenerTable() {
       : 'No candidates currently pass the Trend Template &amp; RS gate.';
     elements.screenerList.innerHTML = `
       <tr class="empty-row">
-        <td colspan="6">${emptyMsg}</td>
+        <td colspan="7">${emptyMsg}</td>
       </tr>
     `;
   } else {
@@ -2093,6 +2131,7 @@ function renderScreenerTable() {
         <td>${c.tt}</td>
         <td>${c.rs}</td>
         <td>${c.vcp}<span class="vcp-flag ${vcpFlag.cls}">${vcpFlag.label}</span></td>
+        <td>${state.screenerTop5Hits[c.ticker] || 0}</td>
         <td><span class="gate-badge ${passes ? 'pass' : 'fail'}">${passes ? 'PASS' : 'FAIL'}</span></td>
         <td>
           <div style="display:flex; gap:0.4rem; align-items:center; justify-content:flex-end;">

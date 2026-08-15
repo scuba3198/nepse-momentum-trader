@@ -154,7 +154,7 @@
           <span class="tooltip" data-tooltip="Copy rows from NepseAlpha's Minervini SEPA screener chart and paste below. A stock must clear both the Trend Template and Relative Strength thresholds to qualify. Qualifying stocks are ranked by RS Score (leadership strength) first, then VCP Pattern Score as a tiebreaker (tighter base = more actionable entry)."><i class="fa-solid fa-circle-info"></i></span>
         </div>
         <div class="card-body">
-          <p class="macro-desc">Gate: Trend Template &amp; RS Score &ge; <span id="screener-threshold-label">75</span>. Showing top 5 passers, ranked by RS Score (VCP as tiebreaker).</p>
+          <p class="macro-desc">Gate: Trend Template &amp; RS Score &ge; <span id="screener-threshold-label">75</span>. Showing top 5 passers, ranked by RS Score (VCP as tiebreaker). Top 5 hits track the first pasted snapshot each day; they do not authorize a buy.</p>
 
           <div class="input-group liquidity-input-group">
             <label for="screener-bulk-paste">Paste rows from NepseAlpha's <strong>Minervini SEPA</strong> <a href="https://nepsealpha.com/mark-minervini/chart?symbol=ADBL" target="_blank" rel="noopener">screener chart</a> (Symbol, Final, Trend Template, VCP, EPS, Sales, Margin, RS — copy directly from the table, one row per stock)</label>
@@ -179,13 +179,14 @@
                   <th>Trend Tmpl</th>
                   <th>RS</th>
                   <th>VCP</th>
+                  <th>Top 5 hits</th>
                   <th>Gate</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody id="screener-list">
                 <tr class="empty-row">
-                  <td colspan="6">No candidates entered yet.</td>
+                  <td colspan="7">No candidates entered yet.</td>
                 </tr>
               </tbody>
             </table>
