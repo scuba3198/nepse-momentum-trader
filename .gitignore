@@ -21,6 +21,7 @@ coverage/
 .vscode/
 .idea/
 *.code-workspace
+.impeccable/
 
 # OS and temporary files
 .DS_Store
