@@ -152,6 +152,117 @@ const elements = {
 
 };
 
+// Motion stays at the DOM boundary: one short-lived transfer can bridge a
+// source control and its newly rendered destination without tying animation
+// to the state/rendering code itself.
+const motionTransfers = [];
+let motionFlushScheduled = false;
+let previousMacroMotionState = null;
+
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+}
+
+function findTradeCard(ticker, stage) {
+  if (!document.querySelectorAll) return null;
+  return Array.from(document.querySelectorAll('.trade-card[data-ticker][data-stage]'))
+    .find(card => card.dataset.ticker === ticker && card.dataset.stage === stage) || null;
+}
+
+function signalMotionArrival(target) {
+  if (!target || prefersReducedMotion()) return;
+  target.classList.remove('motion-arrival');
+  void target.offsetWidth;
+  target.classList.add('motion-arrival');
+  window.setTimeout(() => target.classList.remove('motion-arrival'), 520);
+}
+
+function playMotionTransfer(sourceRect, target) {
+  if (!target) return;
+  const targetRect = target.getBoundingClientRect?.();
+  const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
+  const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+  const visible = rect => rect && rect.width > 0 && rect.height > 0 &&
+    rect.right > 0 && rect.bottom > 0 && rect.left < viewportWidth && rect.top < viewportHeight;
+
+  if (prefersReducedMotion() || !visible(sourceRect) || !visible(targetRect)) {
+    signalMotionArrival(target);
+    return;
+  }
+
+  const overlay = document.createElement('span');
+  overlay.className = 'motion-transfer';
+  overlay.style.left = `${sourceRect.left}px`;
+  overlay.style.top = `${sourceRect.top}px`;
+  overlay.style.width = `${Math.max(8, sourceRect.width)}px`;
+  overlay.style.height = `${Math.max(8, sourceRect.height)}px`;
+  document.body?.appendChild(overlay);
+
+  const startX = sourceRect.left;
+  const startY = sourceRect.top;
+  const endX = targetRect.left + (targetRect.width - sourceRect.width) / 2;
+  const endY = targetRect.top + Math.min(targetRect.height, 28);
+  const finish = () => {
+    overlay.remove();
+    signalMotionArrival(target);
+  };
+
+  if (!overlay.animate) {
+    finish();
+    return;
+  }
+
+  try {
+    const animation = overlay.animate([
+      { transform: 'translate3d(0, 0, 0) scale(1)', opacity: 0.9 },
+      { transform: `translate3d(${endX - startX}px, ${endY - startY}px, 0) scale(0.35)`, opacity: 0.2 }
+    ], { duration: 520, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'forwards' });
+    Promise.resolve(animation.finished).then(finish, finish);
+  } catch (error) {
+    finish();
+  }
+}
+
+function flushMotionTransfers() {
+  motionFlushScheduled = false;
+  while (motionTransfers.length > 0) {
+    const transfer = motionTransfers.shift();
+    playMotionTransfer(transfer.sourceRect, transfer.getTarget());
+  }
+}
+
+function queueMotionTransfer(source, getTarget) {
+  motionTransfers.push({
+    sourceRect: source?.getBoundingClientRect?.() || null,
+    getTarget
+  });
+  if (motionFlushScheduled) return;
+  motionFlushScheduled = true;
+  Promise.resolve().then(flushMotionTransfers);
+}
+
+function setMotionText(element, value) {
+  if (!element) return;
+  const next = String(value);
+  const firstRender = element.dataset.motionValue == null;
+  const changed = element.textContent !== next;
+  element.textContent = next;
+  element.dataset.motionValue = next;
+  if (!firstRender && changed && !prefersReducedMotion()) {
+    element.classList.remove('motion-lock');
+    void element.offsetWidth;
+    element.classList.add('motion-lock');
+  }
+}
+
+function pulseMotionState(element, className) {
+  if (!element || prefersReducedMotion()) return;
+  element.classList.remove(className);
+  void element.offsetWidth;
+  element.classList.add(className);
+  window.setTimeout(() => element.classList.remove(className), 520);
+}
+
 // Generic App Dialog elements (replaces native alert/confirm/prompt)
 const dialogEls = {
   overlay: document.getElementById('app-dialog'),
@@ -971,6 +1082,7 @@ function initHeroSplash() {
   }
 
   render();
+  window.setTimeout(() => field.classList.add('signal-resolved'), 30);
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
@@ -991,16 +1103,44 @@ function initHeroSplash() {
       cue.disabled = true;
 
       const target = document.getElementById('app-content');
-      heroSection.classList.add('hero-dismissed');
-      heroSection.setAttribute('aria-hidden', 'true');
-      if (target) target.classList.add('app-content-visible');
-      document.body.classList.remove('hero-locked');
-
-      // Once the fade/scale-out finishes, take the splash fully out of the
-      // way so it can't intercept clicks or show up in the tab order.
-      window.setTimeout(() => {
+      const logo = document.querySelector('.header-logo');
+      const reduced = prefersReducedMotion();
+      const transitionDuration = reduced
+        ? 160
+        : Math.round((Number.parseFloat(window.getComputedStyle?.(heroSection)?.transitionDuration) || 0.7) * 1000);
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        if (logo) logo.style.viewTransitionName = '';
+        field.style.viewTransitionName = '';
         heroSection.style.display = 'none';
-      }, 750);
+      };
+      const revealDesk = () => {
+        heroSection.classList.add('hero-dismissed');
+        heroSection.setAttribute('aria-hidden', 'true');
+        if (target) target.classList.add('app-content-visible');
+        document.body.classList.remove('hero-locked');
+      };
+
+      if (!reduced && typeof document.startViewTransition === 'function' && logo) {
+        field.style.viewTransitionName = 'hero-signal';
+        try {
+          const transition = document.startViewTransition(() => {
+            field.style.viewTransitionName = '';
+            logo.style.viewTransitionName = 'hero-signal';
+            revealDesk();
+          });
+          Promise.resolve(transition.finished).then(cleanup, cleanup);
+        } catch (error) {
+          field.style.viewTransitionName = '';
+          revealDesk();
+          window.setTimeout(cleanup, transitionDuration);
+        }
+      } else {
+        revealDesk();
+        window.setTimeout(cleanup, transitionDuration);
+      }
     });
   }
 }
@@ -1028,6 +1168,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // update; otherwise a fill-day stop breach can disappear and stale ATR data
 // will set the initial risk.
 function convertOrderToActiveTrade(order, context = {}) {
+  const motionSource = context.motionSource || findTradeCard(order.ticker, 'pending');
   const vwap = order.filledValue / order.filledShares;
   const todayClose = isFinite(context.todayClose) && context.todayClose > 0 ? context.todayClose : null;
   const todayAtr = isFinite(context.todayAtr) && context.todayAtr > 0 ? context.todayAtr : null;
@@ -1071,6 +1212,8 @@ function convertOrderToActiveTrade(order, context = {}) {
   if (todayClose !== null && todayAtr !== null) {
     applyDailyUpdate(newTrade, fillDateISO, todayClose, todayAtr);
   }
+
+  queueMotionTransfer(motionSource, () => findTradeCard(order.ticker, 'active'));
 
   return newTrade;
 }
@@ -1379,6 +1522,7 @@ function setupEventListeners() {
     elements.calcReason.value = '';
     calculatePosition();
     saveState();
+    queueMotionTransfer(elements.executeTradeBtn, () => findTradeCard(ticker, 'pending'));
 
     await appAlert(`Day Order placed: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. It cancels at session end each day — log the close & ATR daily to re-price and resubmit (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts, or until the close breaks the current stop).`);
   });
@@ -1409,7 +1553,7 @@ function setupEventListeners() {
         const currentIdx = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (currentIdx === -1) return; // already gone (e.g. filled/cancelled elsewhere)
         const currentOrder = state.pendingOrders[currentIdx];
-        if (hasFill) convertOrderToActiveTrade(currentOrder);
+        if (hasFill) convertOrderToActiveTrade(currentOrder, { motionSource: cancelBtn.closest('.pending-order-card') });
         state.pendingOrders.splice(currentIdx, 1);
         saveState();
         renderAll();
@@ -1506,7 +1650,8 @@ function setupEventListeners() {
           const newTrade = convertOrderToActiveTrade(order, {
             todayClose,
             todayAtr,
-            fillDateISO: todayISO
+            fillDateISO: todayISO,
+            motionSource: row
           });
           const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
           if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
@@ -1530,7 +1675,7 @@ function setupEventListeners() {
       if (todayClose < order.plannedStop) {
         const hadFill = order.filledShares > 0;
         const newTrade = hadFill
-          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO })
+          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO, motionSource: row })
           : null;
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
@@ -1553,7 +1698,7 @@ function setupEventListeners() {
       if (order.daysWaiting >= MAX_DAY_ORDER_ATTEMPTS) {
         const hadFill = order.filledShares > 0;
         const newTrade = hadFill
-          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO })
+          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO, motionSource: row })
           : null;
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
@@ -1633,7 +1778,7 @@ function setupEventListeners() {
       if (newTargetShares <= order.filledShares && order.filledShares > 0) {
         // Updated risk math says you already hold at (or above) today's target size —
         // stop trying to buy more; take what you have.
-        const newTrade = convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO });
+        const newTrade = convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO, motionSource: row });
         const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
         if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
         clearPendingOrderInputs(row);
@@ -1795,7 +1940,7 @@ function calculatePosition() {
     elements.resPlannedRisk.textContent = 'Rs. 0.00';
     elements.resInitialStop.textContent = 'Rs. 0.00';
     elements.resRiskPerShare.textContent = 'Rs. 0.00';
-    elements.resPositionSize.textContent = '0 Shares';
+    setMotionText(elements.resPositionSize, '0 Shares');
     elements.resPositionSize.style.color = '';
     elements.resCapitalCheck.textContent = 'Rs. 0.00 / Rs. 0.00';
     elements.resCapitalCheck.style.color = '';
@@ -1814,7 +1959,7 @@ function calculatePosition() {
   if (plannedStop <= 0) {
     elements.resInitialStop.textContent = 'Rs. 0.00 (ATR too high)';
     elements.resRiskPerShare.textContent = 'N/A';
-    elements.resPositionSize.textContent = '0 Shares';
+    setMotionText(elements.resPositionSize, '0 Shares');
     elements.resPositionSize.style.color = '';
     elements.resCapitalCheck.textContent = 'Rs. 0.00 / Rs. 0.00';
     elements.resCapitalCheck.style.color = '';
@@ -1831,9 +1976,9 @@ function calculatePosition() {
 
   if (positionSize > 0) {
     const belowMinLot = positionSize < MIN_LOT_SIZE;
-    elements.resPositionSize.textContent = belowMinLot
+    setMotionText(elements.resPositionSize, belowMinLot
       ? `${positionSize} Shares — below ${MIN_LOT_SIZE}-share minimum, don't buy`
-      : `${positionSize} Shares`;
+      : `${positionSize} Shares`);
     elements.resPositionSize.style.color = belowMinLot ? 'var(--color-danger)' : '';
 
     // Capital availability check (risk-based sizing has no built-in cap on capital deployed)
@@ -1894,7 +2039,7 @@ function calculatePosition() {
     // cannot allow an order on a published NEPSE holiday.
     elements.executeTradeBtn.disabled = !holidayCalendarReady || !holidayCalendarAvailable || !macroOk || !slotsAvailable || !cashOk || belowMinLot;
   } else {
-    elements.resPositionSize.textContent = '0 Shares (Risk per share too high)';
+    setMotionText(elements.resPositionSize, '0 Shares (Risk per share too high)');
     elements.resPositionSize.style.color = '';
     elements.resCapitalCheck.textContent = 'Rs. 0.00 / Rs. 0.00';
     elements.capitalPctTile.style.display = 'none';
@@ -2032,11 +2177,15 @@ function removeScreenerCandidate(ticker) {
   saveState();
 }
 
-function useScreenerCandidate(ticker) {
+function useScreenerCandidate(ticker, source) {
   elements.calcTicker.value = ticker;
   calculatePosition();
-  elements.calcTicker.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  elements.calcEntry.focus();
+  queueMotionTransfer(source, () => document.getElementById('calculator-section'));
+  elements.calcTicker.scrollIntoView({
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    block: 'center'
+  });
+  elements.calcEntry.focus({ preventScroll: true });
 }
 
 function getTop5ScreenerCandidates(candidates) {
@@ -2203,7 +2352,10 @@ function renderScreenerTable() {
   elements.screenerSummary.textContent = summaryText;
 
   elements.screenerList.querySelectorAll('.screener-use-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => useScreenerCandidate(e.currentTarget.getAttribute('data-ticker')));
+    btn.addEventListener('click', (e) => useScreenerCandidate(
+      e.currentTarget.getAttribute('data-ticker'),
+      e.currentTarget
+    ));
   });
   elements.screenerList.querySelectorAll('.screener-row-remove').forEach(btn => {
     btn.addEventListener('click', (e) => removeScreenerCandidate(e.currentTarget.getAttribute('data-remove')));
@@ -2413,10 +2565,14 @@ function computeDistributionDays(bars) {
 
 function renderDistributionPanel() {
   const { count, level, flagged, ftdDate, state: marketState } = computeDistributionDays(state.indexBars);
+  const macroMotionState = state.indexBars.length === 0 ? 'empty' : `${marketState}:${level}`;
+  const macroStateChanged = previousMacroMotionState !== null && previousMacroMotionState !== macroMotionState;
+  previousMacroMotionState = macroMotionState;
 
   if (state.indexBars.length === 0) {
     elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count. New entries are blocked until enough history is available.';
     elements.macroStatusText.className = 'macro-status-text halted';
+    if (macroStateChanged) pulseMotionState(elements.macroStatusText, 'risk-state-pulse');
     elements.distributionDaysList.innerHTML = '';
     elements.haltBanner.style.display = 'none';
     return;
@@ -2437,6 +2593,7 @@ function renderDistributionPanel() {
   }
   elements.macroStatusText.innerHTML = `<i class="fa-solid ${copy.icon}"></i> ${copy.text}`;
   elements.macroStatusText.className = `macro-status-text ${copy.cls}`;
+  if (macroStateChanged) pulseMotionState(elements.macroStatusText, 'risk-state-pulse');
 
   if (ftdDate) {
     elements.distributionDaysList.innerHTML = `Follow-through day on ${escapeHTML(ftdDate)} confirmed the current uptrend.` +
@@ -2461,16 +2618,16 @@ function renderDistributionPanel() {
 }
 
 function renderHeader() {
-  elements.headerAccountValue.textContent = formatNPR(state.accountValue);
+  setMotionText(elements.headerAccountValue, formatNPR(state.accountValue));
 
   // Slots badge (open positions + reserved GTC orders)
   const used = state.activeTrades.length + state.pendingOrders.length;
-  elements.headerSlotsCount.textContent = `${used} / ${PORTFOLIO_SLOTS}`;
   elements.headerSlotsCount.className = used >= PORTFOLIO_SLOTS
     ? 'slots-badge slots-full'
     : used > 0
       ? 'slots-badge slots-partial'
       : 'slots-badge';
+  setMotionText(elements.headerSlotsCount, `${used} / ${PORTFOLIO_SLOTS}`);
 
   // Strategy state
   if (state.activeTrades.length > 0) {
@@ -2518,6 +2675,8 @@ function renderPendingOrders() {
     const inputDisabled = loggedToday ? ' disabled' : '';
     const card = document.createElement('div');
     card.className = 'trade-card pending-order-card';
+    card.dataset.ticker = order.ticker;
+    card.dataset.stage = 'pending';
 
     card.innerHTML = `
       <div class="trade-card-header">
@@ -2626,6 +2785,10 @@ function renderPendingOrders() {
 }
 
 function renderActiveTrades() {
+  const previousStops = new Map(
+    Array.from(elements.portfolioList.querySelectorAll('.trade-card[data-ticker][data-stage="active"]'))
+      .map(card => [card.dataset.ticker, parseFloat(card.dataset.trailingStop)])
+  );
   elements.portfolioList.innerHTML = '';
   elements.activeTradesCount.textContent = `${state.activeTrades.length} / ${PORTFOLIO_SLOTS} Open`;
 
@@ -2658,6 +2821,11 @@ function renderActiveTrades() {
 
     const card = document.createElement('div');
     card.className = `trade-card ${isExitRequired ? 'alert-exit' : ''}`;
+    card.dataset.ticker = trade.ticker;
+    card.dataset.stage = 'active';
+    card.dataset.trailingStop = String(trade.trailingStop);
+    const previousStop = previousStops.get(trade.ticker);
+    const stopRatchet = isFinite(previousStop) && trade.trailingStop > previousStop + 1e-9;
 
     card.innerHTML = `
       <div class="trade-card-header">
@@ -2687,7 +2855,7 @@ function renderActiveTrades() {
         </div>
         <div>
           <span class="card-grid-lbl">Trailing Stop</span>
-          <span class="card-grid-val" style="color: var(--color-accent);">Rs. ${formatNPR(trade.trailingStop)}</span>
+          <span class="card-grid-val trailing-stop-value${stopRatchet ? ' stop-ratchet' : ''}" style="color: var(--color-accent);">Rs. ${formatNPR(trade.trailingStop)}</span>
         </div>
         <div>
           <span class="card-grid-lbl">Highest Close</span>

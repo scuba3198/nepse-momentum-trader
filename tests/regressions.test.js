@@ -4,6 +4,7 @@ const vm = require('node:vm');
 
 function loadApp() {
   const noop = () => {};
+  let reducedMotion = false;
   const element = () => ({
     addEventListener: noop,
     removeEventListener: noop,
@@ -22,7 +23,12 @@ function loadApp() {
   const context = {
     console,
     document: { getElementById: element, addEventListener: noop, removeEventListener: noop, createElement: element },
-    window: { addEventListener: noop, setTimeout: noop },
+    window: {
+      addEventListener: noop,
+      setTimeout: noop,
+      matchMedia: () => ({ matches: reducedMotion }),
+      setReducedMotion: value => { reducedMotion = value; }
+    },
     localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
     Blob, URL, Intl, Date, Set, Map, Math, JSON, isFinite, parseFloat, parseInt,
     Promise, Array, Object, Number, String, RegExp, Error
@@ -32,13 +38,34 @@ function loadApp() {
   vm.runInContext(`this.api = {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
-    summarizeExitAccounting, recordScreenerTop5Streaks,
+    summarizeExitAccounting, recordScreenerTop5Streaks, setMotionText,
+    setReducedMotion: value => window.setReducedMotion(value),
     setState: value => { state = value; }, getState: () => state
   };`, context);
   return context.api;
 }
 
 const api = loadApp();
+
+// Motion feedback only replays when a displayed value actually changes.
+{
+  const additions = [];
+  const value = {
+    dataset: {},
+    textContent: '',
+    offsetWidth: 0,
+    classList: { remove: () => {}, add: name => additions.push(name) }
+  };
+  api.setMotionText(value, '10');
+  api.setMotionText(value, '10');
+  assert.equal(additions.length, 0);
+  api.setMotionText(value, '11');
+  assert.equal(additions.length, 1);
+  api.setReducedMotion(true);
+  api.setMotionText(value, '12');
+  assert.equal(additions.length, 1);
+  api.setReducedMotion(false);
+}
 
 // Top 5 streaks advance only across consecutive confirmed market sessions.
 {
