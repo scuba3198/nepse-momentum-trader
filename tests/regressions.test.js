@@ -5,6 +5,7 @@ const vm = require('node:vm');
 function loadApp() {
   const noop = () => {};
   let reducedMotion = false;
+  const storage = new Map();
   const element = () => ({
     addEventListener: noop,
     removeEventListener: noop,
@@ -29,7 +30,11 @@ function loadApp() {
       matchMedia: () => ({ matches: reducedMotion }),
       setReducedMotion: value => { reducedMotion = value; }
     },
-    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    localStorage: {
+      getItem: key => storage.has(key) ? storage.get(key) : null,
+      setItem: (key, value) => storage.set(key, String(value)),
+      removeItem: key => storage.delete(key)
+    },
     Blob, URL, Intl, Date, Set, Map, Math, JSON, isFinite, parseFloat, parseInt,
     Promise, Array, Object, Number, String, RegExp, Error
   };
@@ -39,6 +44,7 @@ function loadApp() {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
     summarizeExitAccounting, recordScreenerTop5Streaks, setMotionText,
+    hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
     setState: value => { state = value; }, getState: () => state
   };`, context);
@@ -46,6 +52,13 @@ function loadApp() {
 }
 
 const api = loadApp();
+
+// The intro is remembered only after it has been successfully entered.
+{
+  assert.equal(api.hasSeenHeroSplash(), false);
+  api.rememberHeroSplashSeen();
+  assert.equal(api.hasSeenHeroSplash(), true);
+}
 
 // Motion feedback only replays when a displayed value actually changes.
 {

@@ -158,6 +158,23 @@ const elements = {
 const motionTransfers = [];
 let motionFlushScheduled = false;
 let previousMacroMotionState = null;
+const HERO_SPLASH_SEEN_KEY = 'atr-desk-intro-seen';
+
+function hasSeenHeroSplash() {
+  try {
+    return localStorage.getItem(HERO_SPLASH_SEEN_KEY) === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
+function rememberHeroSplashSeen() {
+  try {
+    localStorage.setItem(HERO_SPLASH_SEEN_KEY, '1');
+  } catch (error) {
+    // The desk still opens when storage is unavailable; the intro may replay.
+  }
+}
 
 function prefersReducedMotion() {
   return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
@@ -1003,7 +1020,16 @@ function initHeroSplash() {
   const field = document.getElementById('hero-ascii-field');
   const heroSection = document.getElementById('hero-splash');
   const cue = document.getElementById('hero-scroll-cue');
+  const target = document.getElementById('app-content');
   if (!field || !heroSection) return;
+
+  if (hasSeenHeroSplash()) {
+    heroSection.style.display = 'none';
+    heroSection.setAttribute('aria-hidden', 'true');
+    if (target) target.classList.add('app-content-visible');
+    document.body.classList.remove('hero-locked');
+    return;
+  }
 
   const CHARS = '01ATRVCP';
 
@@ -1097,52 +1123,61 @@ function initHeroSplash() {
   // past it, only the button reveals what's underneath.
   document.body.classList.add('hero-locked');
 
-  if (cue) {
-    cue.addEventListener('click', () => {
-      if (cue.disabled) return;
-      cue.disabled = true;
+  function dismissHeroSplash() {
+    if (cue?.disabled) return;
+    if (cue) cue.disabled = true;
 
-      const target = document.getElementById('app-content');
-      const logo = document.querySelector('.header-logo');
-      const reduced = prefersReducedMotion();
-      const transitionDuration = reduced
-        ? 160
-        : Math.round((Number.parseFloat(window.getComputedStyle?.(heroSection)?.transitionDuration) || 0.7) * 1000);
-      let cleaned = false;
-      const cleanup = () => {
-        if (cleaned) return;
-        cleaned = true;
-        if (logo) logo.style.viewTransitionName = '';
-        field.style.viewTransitionName = '';
-        heroSection.style.display = 'none';
-      };
-      const revealDesk = () => {
-        heroSection.classList.add('hero-dismissed');
-        heroSection.setAttribute('aria-hidden', 'true');
-        if (target) target.classList.add('app-content-visible');
-        document.body.classList.remove('hero-locked');
-      };
+    const logo = document.querySelector('.header-logo');
+    const reduced = prefersReducedMotion();
+    const transitionDuration = reduced
+      ? 160
+      : Math.round((Number.parseFloat(window.getComputedStyle?.(heroSection)?.transitionDuration) || 0.7) * 1000);
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      document.removeEventListener('keydown', handleHeroKeydown);
+      if (logo) logo.style.viewTransitionName = '';
+      field.style.viewTransitionName = '';
+      heroSection.style.display = 'none';
+    };
+    const revealDesk = () => {
+      rememberHeroSplashSeen();
+      document.removeEventListener('keydown', handleHeroKeydown);
+      heroSection.classList.add('hero-dismissed');
+      heroSection.setAttribute('aria-hidden', 'true');
+      if (target) target.classList.add('app-content-visible');
+      document.body.classList.remove('hero-locked');
+    };
 
-      if (!reduced && typeof document.startViewTransition === 'function' && logo) {
-        field.style.viewTransitionName = 'hero-signal';
-        try {
-          const transition = document.startViewTransition(() => {
-            field.style.viewTransitionName = '';
-            logo.style.viewTransitionName = 'hero-signal';
-            revealDesk();
-          });
-          Promise.resolve(transition.finished).then(cleanup, cleanup);
-        } catch (error) {
+    if (!reduced && typeof document.startViewTransition === 'function' && logo) {
+      field.style.viewTransitionName = 'hero-signal';
+      try {
+        const transition = document.startViewTransition(() => {
           field.style.viewTransitionName = '';
+          logo.style.viewTransitionName = 'hero-signal';
           revealDesk();
-          window.setTimeout(cleanup, transitionDuration);
-        }
-      } else {
+        });
+        Promise.resolve(transition.finished).then(cleanup, cleanup);
+      } catch (error) {
+        field.style.viewTransitionName = '';
         revealDesk();
         window.setTimeout(cleanup, transitionDuration);
       }
-    });
+    } else {
+      revealDesk();
+      window.setTimeout(cleanup, transitionDuration);
+    }
   }
+
+  function handleHeroKeydown(event) {
+    if (event.key !== 'Enter' || event.repeat || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    dismissHeroSplash();
+  }
+
+  cue?.addEventListener('click', dismissHeroSplash);
+  document.addEventListener('keydown', handleHeroKeydown);
 }
 
 // --------------------------------------------------------------------------
