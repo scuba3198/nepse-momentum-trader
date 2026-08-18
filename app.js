@@ -24,8 +24,8 @@ const DEFAULT_TRANSACTION_COSTS = Object.freeze({
 });
 
 // Screener Shortlist gate thresholds (Step 01): a candidate must clear BOTH
-// the Trend Template and Relative Strength scores to "pass". VCP Pattern
-// Score is NOT a gate — it's used only to rank passers (tighter base first).
+// the Trend Template and Relative Strength scores to "pass". Outside the
+// Top 5 view, passers rank by RS first, then VCP; Top 5 adds stricter thresholds.
 const SCREENER_TT_THRESHOLD = 75;
 const SCREENER_RS_THRESHOLD = 75;
 const SCREENER_TOP_N = 5; // Portfolio has 5 slots — only show the top-ranked passers
@@ -2102,10 +2102,8 @@ function renderAll() {
 // --------------------------------------------------------------------------
 // Screener Shortlist (Step 01)
 // Gate: Trend Template Score AND RS Score must both clear their thresholds.
-// Passers are ranked RS descending (leadership strength, Minervini's primary
-// quality signal), with VCP Pattern Score descending as a tiebreaker (base
-// tightness = timing quality, not overall priority). VCP is never the gate
-// and never the primary sort key.
+// Outside the Top 5 view, passers rank RS descending, with VCP as a
+// tiebreaker. Top 5 eligible candidates rank by current streak first, then RS.
 // --------------------------------------------------------------------------
 
 // Parses rows copy-pasted from NepseAlpha's screener table. Expected column
@@ -2226,7 +2224,7 @@ function useScreenerCandidate(ticker, source) {
 function getTop5ScreenerCandidates(candidates) {
   return candidates
     .filter(c => c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD && c.rs >= SCREENER_TOP5_RS_THRESHOLD && c.vcp >= SCREENER_TOP5_VCP_THRESHOLD)
-    .sort((a, b) => (b.rs - a.rs) || (b.vcp - a.vcp))
+    .sort((a, b) => ((state.screenerTop5Streaks[b.ticker] || 0) - (state.screenerTop5Streaks[a.ticker] || 0)) || (b.rs - a.rs))
     .slice(0, SCREENER_TOP_N);
 }
 
@@ -2269,11 +2267,12 @@ function recordScreenerTop5Streaks(candidates, dateISO = todayISODateString(), m
   const snapshotDate = parseISODateOnly(dateISO);
   if (!snapshotDate || !marketOpen || state.screenerTop5StreakDate === dateISO) return 0;
 
-  const tickers = new Set(getTop5ScreenerCandidates(candidates).map(candidate => candidate.ticker));
   const continues = hasUnbrokenScreenerStreak(state.screenerTop5StreakDate, dateISO);
   if (!continues) {
     Object.keys(state.screenerTop5Streaks).forEach(ticker => delete state.screenerTop5Streaks[ticker]);
-  } else {
+  }
+  const tickers = new Set(getTop5ScreenerCandidates(candidates).map(candidate => candidate.ticker));
+  if (continues) {
     Object.keys(state.screenerTop5Streaks).forEach(ticker => {
       if (!tickers.has(ticker)) delete state.screenerTop5Streaks[ticker];
     });
@@ -2285,9 +2284,8 @@ function recordScreenerTop5Streaks(candidates, dateISO = todayISODateString(), m
   return tickers.size;
 }
 
-// VCP Pattern Score isn't a gate or a primary rank — it's an entry-timing
-// read: has this already-qualified, already-ranked stock actually formed a
-// tight base yet, or is it still extended/choppy with no clean setup?
+// VCP is an entry-timing read for the base pass/fail gate; Top 5 also requires
+// a minimum VCP score before ranking by streak and RS.
 function getVcpFlag(vcp) {
   if (vcp < 50) return { label: 'No Base Yet', cls: 'low' };
   if (vcp < 75) return { label: 'Forming', cls: 'mid' };
@@ -2313,12 +2311,10 @@ function renderScreenerTable() {
     return;
   }
 
-  // Passers (TT & RS both clear threshold) are ranked RS descending first —
-  // RS Rating is Minervini's leadership/strength ranking among qualified
-  // stocks. VCP Pattern Score is used only as a tiebreaker: among stocks of
-  // equal leadership strength, the one with the tighter/cleaner base is the
-  // more actionable entry right now. VCP is never the primary sort — it's a
-  // timing/base-quality check, not a strength ranking.
+  // Outside the Top 5 view, passers (TT & RS both clear threshold) rank RS
+  // descending first, with VCP as a tiebreaker. Top 5 uses
+  // getTop5ScreenerCandidates, which ranks eligible candidates by current
+  // streak, then RS.
   const allPassers = state.screenerCandidates
     .filter(c => c.tt >= SCREENER_TT_THRESHOLD && c.rs >= SCREENER_RS_THRESHOLD)
     .sort((a, b) => (b.rs - a.rs) || (b.vcp - a.vcp));

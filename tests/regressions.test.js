@@ -43,7 +43,7 @@ function loadApp() {
   vm.runInContext(`this.api = {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
-    summarizeExitAccounting, recordScreenerTop5Streaks, setMotionText,
+    summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
     setState: value => { state = value; }, getState: () => state
@@ -121,6 +121,35 @@ const api = loadApp();
   assert.equal(restored.state.screenerSessionAnswers['2026-01-02'], true);
   assert.equal(restored.state.screenerSessionAnswers['2026-01-03'], false);
   assert.equal(restored.state.screenerSessionAnswers.invalid, undefined);
+}
+
+// Top 5 candidates rank by current streak, then RS; VCP does not break ties.
+{
+  api.setState({ screenerTop5Streaks: { STREAK: 3, HIGH_RS: 1 }, screenerTop5StreakDate: '2026-01-02' });
+  const ranked = api.getTop5ScreenerCandidates([
+    { ticker: 'HIGH_RS', tt: 100, rs: 99, vcp: 90 },
+    { ticker: 'STREAK', tt: 100, rs: 90, vcp: 75 },
+    { ticker: 'TIE_LOW_VCP', tt: 100, rs: 95, vcp: 75 },
+    { ticker: 'TIE_HIGH_VCP', tt: 100, rs: 95, vcp: 99 }
+  ]);
+  assert.deepEqual(ranked.map(candidate => candidate.ticker), ['STREAK', 'HIGH_RS', 'TIE_LOW_VCP', 'TIE_HIGH_VCP']);
+}
+
+// A gap clears stale streaks before selecting a fresh Top 5, so they cannot
+// influence the new sequence's ranking.
+{
+  api.setState({ screenerTop5Streaks: { STALE: 9 }, screenerTop5StreakDate: '2026-01-02' });
+  const candidates = [
+    { ticker: 'STALE', tt: 100, rs: 90, vcp: 80 },
+    { ticker: 'A', tt: 100, rs: 99, vcp: 80 },
+    { ticker: 'B', tt: 100, rs: 98, vcp: 80 },
+    { ticker: 'C', tt: 100, rs: 97, vcp: 80 },
+    { ticker: 'D', tt: 100, rs: 96, vcp: 80 },
+    { ticker: 'E', tt: 100, rs: 95, vcp: 80 }
+  ];
+  api.recordScreenerTop5Streaks(candidates, '2026-01-07', true); // Tuesday was missed
+  assert.equal(api.getState().screenerTop5Streaks.STALE, undefined);
+  assert.equal(api.getState().screenerTop5Streaks.A, 1);
 }
 
 // A pending order's prior stop remains the replay floor on fill-day conversion.
