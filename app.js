@@ -1467,16 +1467,16 @@ function setupEventListeners() {
       return;
     }
 
-    // Hard gate: block new entries outright while the trailing distribution-day
-    // count is severe ("Under Distribution"). Existing positions/orders are
-    // unaffected — this only stops committing new capital.
+    // Hard gate: block new entries unless the market is confirmed and healthy.
     const macroGate = getMacroGateStatus();
     if (macroGate.blocked) {
       await appAlert(
         (macroGate.insufficientHistory
-          ? 'New entries are blocked until at least two valid index sessions are available to establish a confirmed market state.'
-          : `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).`) +
-        `\n\nManage existing positions/orders as normal — this only blocks placing new day-orders. It will unblock once the market state is confirmed and healthy.`
+          ? `New entries are blocked until at least ${MIN_INDEX_HISTORY_BARS} valid index sessions (about 6 months) are available to establish a reliable market state.`
+          : macroGate.marketState !== 'uptrend'
+            ? 'New entries are blocked until a follow-through day confirms a new market uptrend.'
+            : `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).`) +
+        `\n\nExisting positions remain managed normally. Expired pending day orders will not be resubmitted until the market state is confirmed and healthy.`
       );
       return;
     }
@@ -1559,7 +1559,7 @@ function setupEventListeners() {
     saveState();
     queueMotionTransfer(elements.executeTradeBtn, () => findTradeCard(ticker, 'pending'));
 
-    await appAlert(`Day Order placed: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. It cancels at session end each day — log the close & ATR daily to re-price and resubmit (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts, or until the close breaks the current stop).`);
+    await appAlert(`Day Order placed: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. It cancels at session end each day — log the close & ATR daily to re-price and resubmit (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts, or until the close breaks the current stop or the market filter closes).`);
   });
 
   // --- Pending Orders: log a trading day, cancel, or mark filled ---
@@ -1722,6 +1722,28 @@ function setupEventListeners() {
             ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder (${order.shares - order.filledShares}) is cancelled.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
             : `No shares had been filled — order cancelled per strategy rules.`)
+        );
+        return;
+      }
+
+      // Today's NEPSE day order has expired. Do not submit its unfilled
+      // remainder for tomorrow unless the broad market is still confirmed.
+      const macroGate = getMacroGateStatus();
+      if (macroGate.blocked) {
+        const hadFill = order.filledShares > 0;
+        const newTrade = hadFill
+          ? convertOrderToActiveTrade(order, { todayClose, todayAtr, fillDateISO: todayISO, motionSource: row })
+          : null;
+        const idxNow = state.pendingOrders.findIndex(o => o.ticker === ticker);
+        if (idxNow !== -1) state.pendingOrders.splice(idxNow, 1);
+        clearPendingOrderInputs(row);
+        saveState();
+        await appAlert(
+          `${order.ticker}: the market filter is no longer confirmed, so tomorrow's day order was not submitted.\n\n` +
+          (hadFill
+            ? `${order.filledShares} filled share(s) were moved to Active Trades; the unfilled remainder was cancelled.` +
+              (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
+            : 'Nothing was filled, so the pending order was cancelled.')
         );
         return;
       }
@@ -2395,33 +2417,33 @@ function renderScreenerTable() {
 
 // --------------------------------------------------------------------------
 // Distribution Day Counter (Step 0)
-// A distribution day = index closes lower than the prior bar's close, on
-// volume higher than the prior bar's volume. Counted over the trailing
+// A distribution day = index closes at least DISTRIBUTION_MIN_DECLINE_PCT
+// below the prior close, on higher volume. Counted over the trailing
 // DISTRIBUTION_WINDOW_DAYS trading days. A Follow-Through Day (a strong up
 // day — DISTRIBUTION_FTD_MIN_PCT or more — on volume higher than the prior
 // bar) resets the window: only bars from the FTD onward are considered.
 // This is a hard gate on NEW entries once severe ("Under Distribution"):
-// Place Day Order is blocked until the count drops back down. It does not
-// touch existing pending orders or open positions — those keep re-pricing,
-// filling, trailing, and exiting normally regardless of this count.
+// Place Day Order is blocked until a new FTD confirms the market. Expired
+// pending day orders are not resubmitted; active positions remain unaffected.
 // --------------------------------------------------------------------------
 const DISTRIBUTION_WINDOW_DAYS = 25;          // sessions after which a distribution day expires
+const DISTRIBUTION_MIN_DECLINE_PCT = 0.2;
 const DISTRIBUTION_CAUTION_THRESHOLD = 3;
 const DISTRIBUTION_SEVERE_THRESHOLD = 5;       // hitting this also kicks the state machine back to 'correction'
 const DISTRIBUTION_FTD_MIN_PCT = 1.5;          // min % gain, on higher volume, to qualify as a Follow-Through Day
 const DISTRIBUTION_FTD_MIN_RALLY_DAY = 4;      // earliest day (of the rally attempt) an FTD can fire
 const DISTRIBUTION_RECOVERY_PCT = 6;           // a distribution day is removed early once price closes this much above it
+const MIN_INDEX_HISTORY_BARS = 120;             // roughly 6 months of NEPSE sessions
 
 // Hard gate: once the trailing distribution-day count hits the severe
 // threshold ("Under Distribution"), new capital commitments are blocked
-// outright — placing a new GTC day-order is disabled until the count drops
-// back down. "Caution" (3-4) stays advisory only, same as before. Existing
-// pending orders keep re-pricing/filling and existing positions keep
-// trailing/exiting normally — the gate only stops *new* entries.
+// outright until a new FTD confirms the market. "Caution" (3-4) stays
+// advisory only. Expired pending orders are not resubmitted; active positions
+// keep trailing/exiting normally.
 function getMacroGateStatus() {
-  const { count, level } = computeDistributionDays(state.indexBars);
-  const insufficientHistory = !Array.isArray(state.indexBars) || state.indexBars.length < 2;
-  return { blocked: insufficientHistory || level === 'distribution', count, level, insufficientHistory };
+  const { count, level, state: marketState } = computeDistributionDays(state.indexBars);
+  const insufficientHistory = !Array.isArray(state.indexBars) || state.indexBars.length < MIN_INDEX_HISTORY_BARS;
+  return { blocked: insufficientHistory || level === 'distribution', count, level, marketState, insufficientHistory };
 }
 
 // Splits one CSV line respecting double-quoted fields (which may contain
@@ -2508,7 +2530,7 @@ function parsePastedIndexBars(text) {
 // Returns { count, level, flagged: [{date, close, volume}], ftdDate, state }
 // --------------------------------------------------------------------------
 function computeDistributionDays(bars) {
-  if (!Array.isArray(bars) || bars.length < 2) {
+  if (!Array.isArray(bars) || bars.length < MIN_INDEX_HISTORY_BARS) {
     // A short history cannot establish the correction -> rally attempt ->
     // confirmed uptrend state. Treat it as blocked instead of treating
     // missing macro data as a healthy tape.
@@ -2533,7 +2555,8 @@ function computeDistributionDays(bars) {
         cur.close < d.close * (1 + DISTRIBUTION_RECOVERY_PCT / 100)
       );
 
-      if (cur.close < prior.close && cur.volume > prior.volume) {
+      const declinePct = ((prior.close - cur.close) / prior.close) * 100;
+      if (declinePct >= DISTRIBUTION_MIN_DECLINE_PCT && cur.volume > prior.volume) {
         activeDist.push({ date: cur.date, close: cur.close, volume: cur.volume, index: i });
       }
 
@@ -2596,12 +2619,12 @@ function computeDistributionDays(bars) {
 
 function renderDistributionPanel() {
   const { count, level, flagged, ftdDate, state: marketState } = computeDistributionDays(state.indexBars);
-  const macroMotionState = state.indexBars.length === 0 ? 'empty' : `${marketState}:${level}`;
+  const macroMotionState = state.indexBars.length < MIN_INDEX_HISTORY_BARS ? 'history' : `${marketState}:${level}`;
   const macroStateChanged = previousMacroMotionState !== null && previousMacroMotionState !== macroMotionState;
   previousMacroMotionState = macroMotionState;
 
-  if (state.indexBars.length === 0) {
-    elements.macroStatusText.innerHTML = '<i class="fa-solid fa-circle-info"></i> Upload at least 6 months of index CSV data (starting before the last major low) to compute the distribution day count. New entries are blocked until enough history is available.';
+  if (state.indexBars.length < MIN_INDEX_HISTORY_BARS) {
+    elements.macroStatusText.innerHTML = `<i class="fa-solid fa-circle-info"></i> Upload at least ${MIN_INDEX_HISTORY_BARS} index sessions (about 6 months, starting before the last major low). ${state.indexBars.length} loaded; new entries remain blocked.`;
     elements.macroStatusText.className = 'macro-status-text halted';
     if (macroStateChanged) pulseMotionState(elements.macroStatusText, 'risk-state-pulse');
     elements.distributionDaysList.innerHTML = '';
@@ -2637,7 +2660,7 @@ function renderDistributionPanel() {
 
   if (level === 'distribution') {
     elements.haltBannerText.textContent = 'UNDER DISTRIBUTION';
-    elements.haltBannerDesc.textContent = 'Elevated distribution day count. New entries are blocked until this clears — manage existing positions/orders as normal.';
+    elements.haltBannerDesc.textContent = 'New entries and pending-order resubmissions are blocked until a new follow-through day confirms the market. Active positions remain managed normally.';
     elements.haltBanner.style.display = 'flex';
   } else if (level === 'caution') {
     elements.haltBannerText.textContent = 'CAUTION';
@@ -2742,7 +2765,7 @@ function renderPendingOrders() {
       </p>` : ''}
 
       <p style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.5rem 0 0;">
-        Day order — cancels at session end. Log today's close &amp; ATR below to re-price and resubmit for tomorrow.
+        Day order — cancels at session end. Log today's close &amp; ATR below to re-price and resubmit for tomorrow while the market remains confirmed.
       </p>
 
       ${loggedToday ? `<p class="text-muted" style="font-size: 0.72rem; margin: 0.45rem 0 0;">Logged for ${escapeHTML(order.lastLoggedDate || displayDateFromISO(todayISODateString()))}; it can be logged again on the next trading session.</p>` : ''}

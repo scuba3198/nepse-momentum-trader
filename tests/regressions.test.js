@@ -44,6 +44,7 @@ function loadApp() {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
+    computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
     setState: value => { state = value; }, getState: () => state
@@ -52,6 +53,36 @@ function loadApp() {
 }
 
 const api = loadApp();
+
+function confirmedMarketBars(count = 120) {
+  const bars = [
+    { date: '0', close: 100, volume: 100 },
+    { date: '1', close: 99, volume: 100 },
+    { date: '2', close: 100, volume: 100 },
+    { date: '3', close: 100.2, volume: 100 },
+    { date: '4', close: 100.4, volume: 100 },
+    { date: '5', close: 102.1, volume: 200 }
+  ];
+  while (bars.length < count) {
+    bars.push({ date: String(bars.length), close: bars.at(-1).close + 0.1, volume: 200 });
+  }
+  return bars;
+}
+
+// The market gate requires the advertised six months of history, and tiny
+// higher-volume declines do not count as institutional distribution.
+{
+  const bars = confirmedMarketBars();
+  api.setState({ indexBars: bars.slice(0, 119) });
+  assert.equal(api.getMacroGateStatus().insufficientHistory, true);
+  api.setState({ indexBars: bars });
+  assert.equal(api.getMacroGateStatus().blocked, false);
+
+  const tinyDecline = { date: '120', close: bars.at(-1).close * 0.999, volume: 201 };
+  const meaningfulDecline = { date: '121', close: tinyDecline.close * 0.997, volume: 202 };
+  assert.equal(api.computeDistributionDays([...bars, tinyDecline]).count, 0);
+  assert.equal(api.computeDistributionDays([...bars, tinyDecline, meaningfulDecline]).count, 1);
+}
 
 // The intro is remembered only after it has been successfully entered.
 {
