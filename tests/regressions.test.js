@@ -44,6 +44,7 @@ function loadApp() {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
+    getAvailableCash, getMaxRiskPerPosition,
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
@@ -258,6 +259,17 @@ function confirmedMarketBars(count = 120) {
     soldValue: 10, soldNetValue: 0, entryCost: 10 });
   assert.equal(summary.netRevenue, 0);
   assert.equal(summary.pnl, -10);
+}
+
+// Risk sizing uses only uncommitted cash, never the separate legacy equity field.
+{
+  api.setState({ accountValue: 9999, cashBalance: 1000, transactionCosts: {}, activeTrades: [
+    { ticker: 'HELD', actualPrice: 500, shares: 10 }
+  ], pendingOrders: [
+    { ticker: 'WAIT', shares: 20, filledShares: 0, plannedEntry: 10 }
+  ] });
+  assert.equal(api.getAvailableCash(), 800);
+  assert.equal(api.getMaxRiskPerPosition(), 8);
 }
 
 console.log('Regression checks passed.');

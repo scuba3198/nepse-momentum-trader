@@ -93,11 +93,11 @@
     </div>
     <div class="header-hero">
       <div class="hero-stat">
-        <span class="stat-label">Account Value</span>
+        <span class="stat-label">Deployable Cash</span>
         <div class="hero-value-group">
           <span class="currency">NPR</span>
           <span id="header-account-value" class="hero-value">1,000,000.00</span>
-          <button id="edit-account-btn" title="Edit Account Value"><i class="fa-solid fa-pen-to-square"></i></button>
+          <button id="edit-account-btn" title="Edit Deployable Cash"><i class="fa-solid fa-pen-to-square"></i></button>
         </div>
       </div>
       <div class="hero-stat hero-stat-secondary">
@@ -280,7 +280,7 @@
               <span class="result-value" id="res-capital-check">Rs. 0.00 / Rs. 0.00</span>
             </div>
             <div class="result-tile" id="capital-pct-tile" style="display:none;">
-              <span class="result-label">Position Capital as % of Account</span>
+              <span class="result-label">Position Capital as % of Deployable Cash</span>
               <span class="result-value" id="res-capital-pct">—</span>
             </div>
             <div class="result-tile" id="liquidity-check-tile" style="display:none;">
@@ -420,16 +420,16 @@
        transform for its entrance animation, and transformed ancestors
        break position:fixed containment (fixed elements inside would
        position relative to that ancestor, not the real viewport). -->
-  <!-- 1. Edit Account Value Modal -->
+  <!-- 1. Edit Deployable Cash Modal -->
   <div class="modal-overlay" id="account-modal">
     <div class="modal-content glass-panel">
-      <h3>Adjust Account Value</h3>
-      <p class="modal-desc">Used to calculate the maximum risk per position: <strong>1% of account value per position</strong> (up to <strong>5%</strong> total with all 5 slots filled). Transaction-cost rates are estimates you control; zero means no cost configured.</p>
+      <h3>Set Deployable Cash</h3>
+      <p class="modal-desc">Enter the cash you currently have available for new trades. Do not include existing holdings. The app sizes each position at <strong>1% risk</strong> and tracks the remaining cash as orders fill.</p>
       <div class="input-group">
-        <label for="modal-account-value">Account Value (NPR)</label>
+        <label for="modal-account-value">Cash Available to Deploy (NPR)</label>
         <div class="input-wrapper number-spin-wrap">
           <span class="input-prefix">Rs.</span>
-          <input type="number" id="modal-account-value" placeholder="1000000.00" step="100">
+          <input type="number" id="modal-account-value" min="0" placeholder="1000000.00" step="100">
           <div class="spin-buttons">
             <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
             <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>

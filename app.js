@@ -5,7 +5,7 @@
 // Strategy Constants
 const PORTFOLIO_SLOTS = 5;
 const DEFAULT_ACCOUNT_VALUE = 1000000.00;
-const RISK_PER_POSITION_PCT = 0.01;                                        // 1% of account value, per position
+const RISK_PER_POSITION_PCT = 0.01;                                        // 1% of deployable cash, per position
 const TOTAL_PORTFOLIO_RISK_PCT = RISK_PER_POSITION_PCT * PORTFOLIO_SLOTS;  // 5% with all slots filled
 const ATR_MULTIPLIER = 2.5;
 const MIN_LOT_SIZE = 10; // NEPSE: odd lots under 10 shares are a hassle to buy/sell — don't recommend them
@@ -48,10 +48,11 @@ let holidayCalendarAvailable = false;
 
 // Application State
 let state = {
+  // Legacy persisted equity field retained so old exports still import cleanly.
+  // New position sizing and the UI use deployable cash instead.
   accountValue: DEFAULT_ACCOUNT_VALUE,
-  // Actual settled cash.  Account value is the equity/risk-sizing base;
-  // this ledger changes when a fill or sale actually moves cash.  Pending
-  // unfilled shares are reserved separately by getAvailableCash().
+  // Actual settled cash. This ledger changes when a fill or sale moves cash;
+  // pending unfilled shares are reserved separately by getAvailableCash().
   cashBalance: DEFAULT_ACCOUNT_VALUE,
   realizedPnl: 0,
   transactionCosts: { ...DEFAULT_TRANSACTION_COSTS },
@@ -422,6 +423,10 @@ function getAvailableCash(excludeOrder = null) {
   return Math.max(0, cashBalance - getPendingReservedCash(excludeOrder));
 }
 
+function getMaxRiskPerPosition(excludeOrder = null) {
+  return getAvailableCash(excludeOrder) * RISK_PER_POSITION_PCT;
+}
+
 function adjustCashBalance(delta) {
   const amount = sanitizeNumber(delta, 0);
   state.cashBalance = sanitizeNumber(state.cashBalance, state.accountValue) + amount;
@@ -430,8 +435,7 @@ function adjustCashBalance(delta) {
 function recordRealizedPnl(pnl) {
   const realized = sanitizeNumber(pnl, 0);
   state.realizedPnl = sanitizeNumber(state.realizedPnl, 0) + realized;
-  // Account value is the equity base used for future risk sizing.  Apply each
-  // tranche's realized P&L exactly once, including partial exits.
+  // Keep the legacy equity field aligned for old exports. Live sizing uses cash.
   state.accountValue = Math.max(0, sanitizeNumber(state.accountValue, DEFAULT_ACCOUNT_VALUE) + realized);
 }
 
@@ -1225,9 +1229,8 @@ function convertOrderToActiveTrade(order, context = {}) {
     highestClose: vwap,
     lastClose: todayClose !== null ? todayClose : vwap,
     lastAtr: todayAtr,
-    // Use the account value that was actually used to size this order (captured
-    // when it was first placed), not today's value — the share count was fixed
-    // against that original sizing, even if this order took several days to fill.
+    // Use the deployable cash that actually sized this order, captured when it
+    // was placed or re-priced, even if the order took several days to fill.
     accountValueAtEntry: order.accountValueAtEntry != null ? order.accountValueAtEntry : state.accountValue,
     entryDate,
     entryISO, // actual first-fill date, used for catch-up date math
@@ -1364,9 +1367,9 @@ function setupEventListeners() {
   });
   elements.screenerBulkParseBtn.addEventListener('click', bulkAddScreenerCandidates);
 
-  // --- Account Value Modal ---
+  // --- Deployable Cash Modal ---
   elements.editAccountBtn.addEventListener('click', () => {
-    elements.modalAccountValue.value = state.accountValue;
+    elements.modalAccountValue.value = getAvailableCash();
     const costs = getTransactionCosts();
     if (elements.modalBrokeragePct) elements.modalBrokeragePct.value = costs.brokeragePct;
     if (elements.modalRegulatoryFeePct) elements.modalRegulatoryFeePct.value = costs.regulatoryFeePct;
@@ -1386,12 +1389,12 @@ function setupEventListeners() {
 
   elements.saveAccountBtn.addEventListener('click', () => {
     const val = parseFloat(elements.modalAccountValue.value);
-    if (!isNaN(val) && val > 0) {
-      const accountDelta = val - state.accountValue;
-      state.accountValue = val;
-      // Keep the cash ledger aligned when the user deposits, withdraws, or
-      // corrects the account value while positions are still open.
-      adjustCashBalance(accountDelta);
+    if (!isNaN(val) && val >= 0) {
+      const cashDelta = val + getPendingReservedCash()
+        - sanitizeNumber(state.cashBalance, state.accountValue);
+      adjustCashBalance(cashDelta);
+      // Retain the legacy persisted equity field for backwards-compatible imports.
+      state.accountValue = Math.max(0, sanitizeNumber(state.accountValue, DEFAULT_ACCOUNT_VALUE) + cashDelta);
       state.transactionCosts = normalizeTransactionCosts({
         brokeragePct: elements.modalBrokeragePct?.value,
         regulatoryFeePct: elements.modalRegulatoryFeePct?.value,
@@ -1501,7 +1504,8 @@ function setupEventListeners() {
       return;
     }
 
-    const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
+    const cashAvailable = getAvailableCash();
+    const maxRiskPerPosition = getMaxRiskPerPosition();
     const plannedStop = entry - (ATR_MULTIPLIER * atr);
     const riskPerShare = entry - plannedStop;
     const size = Math.floor(maxRiskPerPosition / riskPerShare);
@@ -1510,7 +1514,6 @@ function setupEventListeners() {
 
     // Guard: available cash (risk-based sizing has no built-in cap on capital deployed,
     // only on total risk — so check we actually have the cash for this position).
-    const cashAvailable = getAvailableCash();
     const requiredCapital = buyNetCost(size * entry);
     if (requiredCapital > cashAvailable) {
       const affordableSize = Math.floor(cashAvailable / (entry * (1 + (getTransactionCosts().brokeragePct + getTransactionCosts().regulatoryFeePct) / 100)));
@@ -1545,7 +1548,7 @@ function setupEventListeners() {
       fillLog: [],
       lastLoggedDate: '',
       lastLoggedISO: null,
-      accountValueAtEntry: state.accountValue,  // account value used to size this order originally
+      accountValueAtEntry: cashAvailable,  // deployable cash used to size this order
       entryReason              // why the trade was taken — optional, carried through to the active trade and history
     });
 
@@ -1774,9 +1777,10 @@ function setupEventListeners() {
       // Step 4: no breach, still within the window — roll forward to tomorrow's day-order.
       // New price = today's close. New stop = new price − 2.5×today's ATR. Risk-per-share is
       // always 2.5×ATR by construction, so the target share count only depends on ATR, not price —
-      // it's recomputed fresh each day so the 1%-of-account risk promise stays accurate no matter
+      // it's recomputed fresh each day so the 1%-of-deployable-cash risk promise stays accurate no matter
       // how many days this takes to fill.
-      const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
+      const cashAvailableForThisOrder = getAvailableCash(order);
+      const maxRiskPerPosition = getMaxRiskPerPosition(order);
       const newStop = todayClose - (ATR_MULTIPLIER * todayAtr);
       const newRiskPerShare = todayClose - newStop; // == ATR_MULTIPLIER * todayAtr
       let newTargetShares = Math.floor(maxRiskPerPosition / newRiskPerShare);
@@ -1788,7 +1792,6 @@ function setupEventListeners() {
       // Filled shares have already reduced cashBalance.  Exclude this order's
       // old unfilled reservation while sizing its replacement, but retain all
       // other pending orders' reservations.
-      const cashAvailableForThisOrder = getAvailableCash(order);
       const buyCostPerShare = buyNetCost(todayClose);
       const affordableNewShares = order.filledShares + Math.floor(cashAvailableForThisOrder / buyCostPerShare);
       let cappedByCash = false;
@@ -1850,9 +1853,9 @@ function setupEventListeners() {
       order.shares = Math.max(newTargetShares, order.filledShares);
       // Keep the risk-tracking basis in sync with what actually sized the order today —
       // otherwise "Actual Risk %" shown later on the active trade / history would be
-      // computed against a stale account value from the original placement day, even
-      // though the share count above was just resized against TODAY's account value.
-      order.accountValueAtEntry = state.accountValue;
+      // computed against stale cash from the original placement day, even
+      // though the share count above was just resized against TODAY's deployable cash.
+      order.accountValueAtEntry = cashAvailableForThisOrder;
       clearPendingOrderInputs(row);
       saveState();
       await appAlert(
@@ -2007,7 +2010,8 @@ function calculatePosition() {
     return;
   }
 
-  const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
+  const cashAvailable = getAvailableCash();
+  const maxRiskPerPosition = getMaxRiskPerPosition();
   const plannedStop = entry - (ATR_MULTIPLIER * atr);
   const riskPerShare = entry - plannedStop;
 
@@ -2039,7 +2043,6 @@ function calculatePosition() {
     elements.resPositionSize.style.color = belowMinLot ? 'var(--color-danger)' : '';
 
     // Capital availability check (risk-based sizing has no built-in cap on capital deployed)
-    const cashAvailable = getAvailableCash();
     const requiredCapital = positionSize * entry;
     const cashOk = requiredCapital <= cashAvailable;
 
@@ -2048,9 +2051,9 @@ function calculatePosition() {
 
     // Capital concentration check — advisory only. A fixed 1% risk allocation does NOT
     // imply a fixed capital allocation: low-ATR, high-price stocks can consume a large
-    // share of account capital for the same 1% risk. Flag it so it's a conscious choice
+    // share of deployable cash for the same 1% risk. Flag it so it's a conscious choice
     // rather than something only discovered when the cash guard blocks a later trade.
-    const capitalPct = (requiredCapital / state.accountValue) * 100;
+    const capitalPct = (requiredCapital / cashAvailable) * 100;
     let capitalPctColor = 'var(--color-primary)'; // green
     let capitalPctLabel = '';
     if (capitalPct > 40) {
@@ -2672,7 +2675,7 @@ function renderDistributionPanel() {
 }
 
 function renderHeader() {
-  setMotionText(elements.headerAccountValue, formatNPR(state.accountValue));
+  setMotionText(elements.headerAccountValue, formatNPR(getAvailableCash()));
 
   // Slots badge (open positions + reserved GTC orders)
   const used = state.activeTrades.length + state.pendingOrders.length;
@@ -2868,7 +2871,7 @@ function renderActiveTrades() {
     // Step 7: exit if last close is below trailing stop
     const isExitRequired = (trade.lastClose || trade.actualPrice) < trade.trailingStop;
 
-    // Actual risk % relative to account value at entry
+    // Actual risk % relative to deployable cash at entry
     const entryAccountValue = trade.accountValueAtEntry || state.accountValue;
     const actualRiskNpr = (ATR_MULTIPLIER * trade.initialAtr) * trade.shares;
     const actualRiskPct = (actualRiskNpr / entryAccountValue) * 100;
@@ -2888,7 +2891,7 @@ function renderActiveTrades() {
           <span class="shares-badge">${trade.shares} Shares</span>
           ${trade.soldShares > 0 ? `<span class="risk-badge-mini" title="Already exited via partial sells"><i class="fa-solid fa-layer-group"></i> ${trade.soldShares} sold so far</span>` : ''}
           ${trade.transactionCostsApplied ? '' : '<span class="risk-badge-mini" title="Imported before transaction-cost tracking"><i class="fa-solid fa-tag"></i> Legacy gross</span>'}
-          <span class="risk-badge-mini" title="Actual Risk % of account value at entry">
+          <span class="risk-badge-mini" title="Actual Risk % of deployable cash at entry">
             <i class="fa-solid fa-shield-halved"></i> Risk: ${actualRiskPct.toFixed(2)}%
           </span>
         </div>
