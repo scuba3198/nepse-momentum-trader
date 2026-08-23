@@ -11,18 +11,6 @@ const ATR_MULTIPLIER = 2.5;
 const MIN_LOT_SIZE = 10; // NEPSE: odd lots under 10 shares are a hassle to buy/sell — don't recommend them
 const MAX_DAY_ORDER_ATTEMPTS = 5;            // Give up after 5 daily re-priced attempts if never filled
 
-// Transaction costs are deliberately user-configurable. NEPSE brokerage,
-// SEBON/regulatory charges, DP fees, and capital-gains tax change over time and
-// can also vary by broker/account type, so the app ships with zero estimates
-// rather than asserting a statutory rate. Configure them in Account Settings;
-// all newly recorded buys/sells are then netted with these values.
-const DEFAULT_TRANSACTION_COSTS = Object.freeze({
-  brokeragePct: 0,
-  regulatoryFeePct: 0,
-  dpChargePerSell: 0,
-  capitalGainsTaxPct: 0
-});
-
 // Screener Shortlist gate thresholds (Step 01): a candidate must clear BOTH
 // the Trend Template and Relative Strength scores to "pass". Outside the
 // Top 5 view, passers rank by RS first, then VCP; Top 5 adds stricter thresholds.
@@ -54,8 +42,6 @@ let state = {
   // unfilled shares are reserved separately by getAvailableCash().
   cashBalance: DEFAULT_ACCOUNT_VALUE,
   realizedPnl: 0,
-  transactionCosts: { ...DEFAULT_TRANSACTION_COSTS },
-  transactionCostsConfigured: false,
   indexBars: [],            // Step 0: Distribution Day Counter — { date, close, volume }, ascending
   pendingOrders: [],        // Step 4: GTC Limit Orders awaiting fill
   activeTrades: [],
@@ -142,11 +128,6 @@ const elements = {
   // Modals
   accountModal: document.getElementById('account-modal'),
   modalAccountValue: document.getElementById('modal-account-value'),
-  modalBrokeragePct: document.getElementById('modal-brokerage-pct'),
-  modalRegulatoryFeePct: document.getElementById('modal-regulatory-fee-pct'),
-  modalDpCharge: document.getElementById('modal-dp-charge'),
-  modalCapitalGainsTaxPct: document.getElementById('modal-capital-gains-tax-pct'),
-  transactionCostStatus: document.getElementById('transaction-cost-status'),
   closeAccountModal: document.getElementById('close-account-modal'),
   saveAccountBtn: document.getElementById('save-account-btn'),
 
@@ -409,7 +390,10 @@ function getPendingReservedCash(excludeOrder = null) {
     const shares = Math.max(filledShares, Math.floor(sanitizeNumber(order.shares, 0)));
     const unfilledShares = shares - filledShares;
     const plannedEntry = Math.max(0, sanitizeNumber(order.plannedEntry, 0));
-    return sum + buyNetCost(unfilledShares * plannedEntry);
+    const legacyReservation = sanitizeNumber(order.legacyReservedCash, NaN);
+    return sum + (isFinite(legacyReservation) && legacyReservation > 0
+      ? legacyReservation
+      : unfilledShares * plannedEntry);
   }, 0);
 }
 
@@ -441,47 +425,6 @@ function recordRealizedPnl(pnl) {
 function sanitizeNumber(value, fallback) {
   const n = parseFloat(value);
   return isFinite(n) ? n : fallback;
-}
-
-function normalizeTransactionCosts(rawCosts) {
-  const raw = rawCosts && typeof rawCosts === 'object' ? rawCosts : {};
-  const boundedPct = (value, fallback = 0) => Math.min(100, Math.max(0, sanitizeNumber(value, fallback)));
-  return {
-    brokeragePct: boundedPct(raw.brokeragePct),
-    regulatoryFeePct: boundedPct(raw.regulatoryFeePct),
-    dpChargePerSell: Math.max(0, sanitizeNumber(raw.dpChargePerSell, 0)),
-    capitalGainsTaxPct: boundedPct(raw.capitalGainsTaxPct)
-  };
-}
-
-function getTransactionCosts() {
-  return normalizeTransactionCosts(state.transactionCosts);
-}
-
-function buyTransactionCost(grossValue) {
-  const gross = Math.max(0, sanitizeNumber(grossValue, 0));
-  const costs = getTransactionCosts();
-  return gross * ((costs.brokeragePct + costs.regulatoryFeePct) / 100);
-}
-
-function buyNetCost(grossValue) {
-  const gross = Math.max(0, sanitizeNumber(grossValue, 0));
-  return gross + buyTransactionCost(gross);
-}
-
-function sellTransactionCost(grossValue, grossCostBasis) {
-  const gross = Math.max(0, sanitizeNumber(grossValue, 0));
-  const basis = Math.max(0, sanitizeNumber(grossCostBasis, 0));
-  const costs = getTransactionCosts();
-  const brokerageAndRegulatory = gross * ((costs.brokeragePct + costs.regulatoryFeePct) / 100);
-  const capitalGainsTax = Math.max(0, gross - basis) * (costs.capitalGainsTaxPct / 100);
-  // DP is charged once per sell execution, not per share.
-  return brokerageAndRegulatory + capitalGainsTax + (gross > 0 ? costs.dpChargePerSell : 0);
-}
-
-function sellNetProceeds(grossValue, grossCostBasis) {
-  const gross = Math.max(0, sanitizeNumber(grossValue, 0));
-  return Math.max(0, gross - sellTransactionCost(gross, grossCostBasis));
 }
 
 function formatNPR(value) {
@@ -552,7 +495,7 @@ function normalizeIndexBars(rawBars) {
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function normalizePendingOrder(rawOrder, accountValue) {
+function normalizePendingOrder(rawOrder, accountValue, legacyBuyRate = 0) {
   if (!rawOrder || typeof rawOrder !== 'object' || Array.isArray(rawOrder)) return null;
 
   const ticker = normalizeTicker(rawOrder.ticker);
@@ -571,8 +514,7 @@ function normalizePendingOrder(rawOrder, accountValue) {
   const filledValue = isFinite(filledValueRaw) && filledValueRaw >= 0 ? filledValueRaw : 0;
   if (filledShares > 0 && filledValue <= 0) return null;
   const filledCostRaw = parseFloat(rawOrder.filledCost);
-  // filledCost is the net cash actually spent. Missing values identify legacy
-  // gross records; retain them safely by treating gross value as the cost.
+  // Preserve the stored record-level basis; new fills use gross values.
   const filledCost = filledShares > 0
     ? (isFinite(filledCostRaw) && filledCostRaw >= filledValue ? filledCostRaw : filledValue)
     : 0;
@@ -581,6 +523,14 @@ function normalizePendingOrder(rawOrder, accountValue) {
   const plannedStopRaw = parseFloat(rawOrder.plannedStop);
   const plannedStop = isFinite(plannedStopRaw) && plannedStopRaw > 0 ? plannedStopRaw : fallbackStop;
   if (!isFinite(plannedStop) || plannedStop <= 0) return null;
+
+  const unfilledShares = shares - filledShares;
+  const legacyReservedCashRaw = parseFloat(rawOrder.legacyReservedCash);
+  const legacyReservedCash = unfilledShares > 0
+    ? (isFinite(legacyReservedCashRaw) && legacyReservedCashRaw > 0
+      ? legacyReservedCashRaw
+      : legacyBuyRate > 0 ? unfilledShares * plannedEntry * (1 + legacyBuyRate) : null)
+    : null;
 
   const daysWaitingRaw = parseFloat(rawOrder.daysWaiting);
   const daysWaiting = isFinite(daysWaitingRaw)
@@ -629,7 +579,7 @@ function normalizePendingOrder(rawOrder, accountValue) {
     filledShares,
     filledValue: filledShares > 0 ? filledValue : 0,
     filledCost,
-    transactionCostsApplied: isFinite(filledCostRaw),
+    legacyReservedCash,
     daysWaiting,
     placedDate: placed.display,
     placedISO: placed.iso,
@@ -714,7 +664,6 @@ function normalizeActiveTrade(rawTrade, accountValue) {
     entryShares: isFinite(entrySharesRaw) && entrySharesRaw > 0 ? Math.floor(entrySharesRaw) : shares + (isFinite(soldSharesRaw) ? Math.max(0, Math.floor(soldSharesRaw)) : 0),
     entryGrossValue: isFinite(entryGrossValueRaw) && entryGrossValueRaw > 0 ? entryGrossValueRaw : actualPrice * (shares + (isFinite(soldSharesRaw) ? Math.max(0, Math.floor(soldSharesRaw)) : 0)),
     entryCost: isFinite(entryCostRaw) && entryCostRaw > 0 ? entryCostRaw : actualPrice * (shares + (isFinite(soldSharesRaw) ? Math.max(0, Math.floor(soldSharesRaw)) : 0)),
-    transactionCostsApplied: isFinite(entryCostRaw) || isFinite(soldNetValueRaw),
     updateLog
   };
 }
@@ -758,8 +707,9 @@ function normalizeHistoryItem(rawHistoryItem) {
     grossPnl: isFinite(grossPnlRaw) ? grossPnlRaw : pnl,
     netEntryCost: isFinite(netEntryCostRaw) ? netEntryCostRaw : entryPrice * shares,
     netExitValue: isFinite(netExitValueRaw) ? netExitValueRaw : exitPrice * shares,
-    pnlBasis: rawHistoryItem.pnlBasis === 'net' || isFinite(netPnlRaw) ? 'net' : 'legacy-gross',
-    transactionCostsApplied: rawHistoryItem.transactionCostsApplied === true || isFinite(netPnlRaw),
+    pnlBasis: rawHistoryItem.pnlBasis === 'gross'
+      ? 'gross'
+      : rawHistoryItem.pnlBasis === 'net' || isFinite(netPnlRaw) ? 'net' : 'legacy-gross',
     entryReason: normalizeText(rawHistoryItem.entryReason, '').trim(),
     exitReason: normalizeText(rawHistoryItem.exitReason, '').trim()
   };
@@ -784,7 +734,14 @@ function normalizePersistedState(rawState) {
   const accountValue = isFinite(accountRaw) && accountRaw > 0 ? accountRaw : DEFAULT_ACCOUNT_VALUE;
 
   const rawPending = Array.isArray(raw.pendingOrders) ? raw.pendingOrders : [];
-  const pendingOrders = rawPending.map(order => normalizePendingOrder(order, accountValue)).filter(Boolean);
+  // Compatibility only: preserve each imported pending order's old buy-side
+  // reservation once, then all new activity uses gross values.
+  const rawCosts = raw.transactionCosts && typeof raw.transactionCosts === 'object' ? raw.transactionCosts : null;
+  const legacyBuyRate = rawCosts
+    ? (Math.min(100, Math.max(0, sanitizeNumber(rawCosts.brokeragePct, 0))) +
+      Math.min(100, Math.max(0, sanitizeNumber(rawCosts.regulatoryFeePct, 0)))) / 100
+    : 0;
+  const pendingOrders = rawPending.map(order => normalizePendingOrder(order, accountValue, legacyBuyRate)).filter(Boolean);
   const rawActive = Array.isArray(raw.activeTrades) ? raw.activeTrades : [];
   const activeTrades = rawActive.map(trade => normalizeActiveTrade(trade, accountValue)).filter(Boolean);
   activeTrades.forEach(trade => recomputeTradeFromUpdateLog(trade));
@@ -844,8 +801,6 @@ function normalizePersistedState(rawState) {
       accountValue,
       cashBalance,
       realizedPnl: sanitizeNumber(raw.realizedPnl, 0),
-      transactionCosts: normalizeTransactionCosts(raw.transactionCosts),
-      transactionCostsConfigured: !!(raw.transactionCosts && typeof raw.transactionCosts === 'object'),
       indexBars: normalizeIndexBars(raw.indexBars),
       pendingOrders: dedupedPending,
       activeTrades: dedupedActive,
@@ -1237,8 +1192,7 @@ function convertOrderToActiveTrade(order, context = {}) {
     soldNetValue: 0,
     entryShares: order.filledShares,
     entryGrossValue: order.filledValue,
-    entryCost: order.filledCost != null ? order.filledCost : buyNetCost(order.filledValue),
-    transactionCostsApplied: order.transactionCostsApplied === true,
+    entryCost: order.filledCost != null ? order.filledCost : order.filledValue,
     updateLog: []    // Daily Routine history: { date, close, atr, trailingStop } per submission
   };
 
@@ -1261,11 +1215,11 @@ function clearPendingOrderInputs(row) {
 
 function recordPendingFill(order, fillShares, fillPrice, fillDateISO) {
   const fillValue = fillShares * fillPrice;
-  const fillCost = buyNetCost(fillValue);
+  const fillCost = fillValue;
   order.filledShares += fillShares;
   order.filledValue += fillValue;
   order.filledCost = sanitizeNumber(order.filledCost, order.filledValue - fillValue) + fillCost;
-  order.transactionCostsApplied = true;
+  order.legacyReservedCash = null;
   adjustCashBalance(-fillCost);
 
   const dates = normalizeDateFields(fillDateISO, '');
@@ -1367,16 +1321,6 @@ function setupEventListeners() {
   // --- Account Value Modal ---
   elements.editAccountBtn.addEventListener('click', () => {
     elements.modalAccountValue.value = state.accountValue;
-    const costs = getTransactionCosts();
-    if (elements.modalBrokeragePct) elements.modalBrokeragePct.value = costs.brokeragePct;
-    if (elements.modalRegulatoryFeePct) elements.modalRegulatoryFeePct.value = costs.regulatoryFeePct;
-    if (elements.modalDpCharge) elements.modalDpCharge.value = costs.dpChargePerSell;
-    if (elements.modalCapitalGainsTaxPct) elements.modalCapitalGainsTaxPct.value = costs.capitalGainsTaxPct;
-    if (elements.transactionCostStatus) {
-      elements.transactionCostStatus.textContent = state.transactionCostsConfigured
-        ? 'Configured costs apply to new fills and sales. Imported legacy/gross records retain their original basis.'
-        : 'No transaction costs were configured. Legacy records remain labelled gross; configure rates for new activity.';
-    }
     elements.accountModal.classList.add('active');
   });
 
@@ -1392,13 +1336,6 @@ function setupEventListeners() {
       // Keep the cash ledger aligned when the user deposits, withdraws, or
       // corrects the account value while positions are still open.
       adjustCashBalance(accountDelta);
-      state.transactionCosts = normalizeTransactionCosts({
-        brokeragePct: elements.modalBrokeragePct?.value,
-        regulatoryFeePct: elements.modalRegulatoryFeePct?.value,
-        dpChargePerSell: elements.modalDpCharge?.value,
-        capitalGainsTaxPct: elements.modalCapitalGainsTaxPct?.value
-      });
-      state.transactionCostsConfigured = true;
       elements.accountModal.classList.remove('active');
       saveState();
       calculatePosition();
@@ -1414,8 +1351,6 @@ function setupEventListeners() {
           accountValue: DEFAULT_ACCOUNT_VALUE,
           cashBalance: DEFAULT_ACCOUNT_VALUE,
           realizedPnl: 0,
-          transactionCosts: { ...DEFAULT_TRANSACTION_COSTS },
-          transactionCostsConfigured: false,
           indexBars: [],
           pendingOrders: [],
           activeTrades: [],
@@ -1506,9 +1441,9 @@ function setupEventListeners() {
     // Guard: available cash (risk-based sizing has no built-in cap on capital deployed,
     // only on total risk — so check we actually have the cash for this position).
     const cashAvailable = getAvailableCash();
-    const requiredCapital = buyNetCost(size * entry);
+    const requiredCapital = size * entry;
     if (requiredCapital > cashAvailable) {
-      const affordableSize = Math.floor(cashAvailable / (entry * (1 + (getTransactionCosts().brokeragePct + getTransactionCosts().regulatoryFeePct) / 100)));
+      const affordableSize = Math.floor(cashAvailable / entry);
       await appAlert(
         `Not enough cash for the full risk-sized position.\n\n` +
         `Required: Rs. ${formatNPR(requiredCapital)} (${size} shares)\n` +
@@ -1530,8 +1465,7 @@ function setupEventListeners() {
       shares: size,          // planned/target quantity
       filledShares: 0,       // cumulative shares actually filled so far (may span multiple days)
       filledValue: 0,        // cumulative price*shares filled so far, for VWAP
-      filledCost: 0,         // net cash debited for fills (gross value + buy fees)
-      transactionCostsApplied: true,
+      filledCost: 0,         // cash debited for fills; new records use gross value
       daysWaiting: 0,
       placedDate: new Date().toLocaleDateString(),
       placedISO: todayISODateString(),
@@ -1655,14 +1589,14 @@ function setupEventListeners() {
           return;
         }
 
-        // Validate the net cash debit before mutating the order or ledger.
+        // Validate the cash debit before mutating the order or ledger.
         // Excluding this order releases its unfilled reservation while all
         // other pending reservations remain protected.
         const fillCashCheck = validatePendingFillCash(order, fillShares, fillPrice);
         if (!fillCashCheck.ok) {
           await appAlert(
             `This fill would overdraw tracked cash.\n\n` +
-            `Required (including configured buy costs): Rs. ${formatNPR(fillCashCheck.required)}\n` +
+            `Required: Rs. ${formatNPR(fillCashCheck.required)}\n` +
             `Available after other pending reservations: Rs. ${formatNPR(fillCashCheck.available)}\n\n` +
             `Reduce the fill quantity/price, cancel another pending order, or add cash before logging this fill.`
           );
@@ -1784,7 +1718,7 @@ function setupEventListeners() {
       // old unfilled reservation while sizing its replacement, but retain all
       // other pending orders' reservations.
       const cashAvailableForThisOrder = getAvailableCash(order);
-      const buyCostPerShare = buyNetCost(todayClose);
+      const buyCostPerShare = todayClose;
       const affordableNewShares = order.filledShares + Math.floor(cashAvailableForThisOrder / buyCostPerShare);
       let cappedByCash = false;
       if (newTargetShares > affordableNewShares) {
@@ -1795,6 +1729,7 @@ function setupEventListeners() {
       order.plannedEntry = todayClose;
       order.atr = todayAtr;
       order.plannedStop = newStop;
+      order.legacyReservedCash = null;
 
       if (newTargetShares <= 0 && order.filledShares === 0) {
         // Today's ATR is too large relative to the 1% risk budget to size any shares at all —
@@ -2856,7 +2791,7 @@ function renderActiveTrades() {
     const totalCost = (trade.entryCost || (trade.actualPrice * (trade.shares + (trade.soldShares || 0)))) /
       Math.max(1, trade.entryShares || (trade.shares + (trade.soldShares || 0))) * trade.shares;
     const currentGrossValue = currentPrice * trade.shares;
-    const currentVal = sellNetProceeds(currentGrossValue, trade.actualPrice * trade.shares);
+    const currentVal = currentGrossValue;
     const pnl = currentVal - totalCost;
     const pnlPct = totalCost > 0 ? (pnl / totalCost) * 100 : 0;
 
@@ -2882,7 +2817,6 @@ function renderActiveTrades() {
           <h3>${escapeHTML(trade.ticker)}</h3>
           <span class="shares-badge">${trade.shares} Shares</span>
           ${trade.soldShares > 0 ? `<span class="risk-badge-mini" title="Already exited via partial sells"><i class="fa-solid fa-layer-group"></i> ${trade.soldShares} sold so far</span>` : ''}
-          ${trade.transactionCostsApplied ? '' : '<span class="risk-badge-mini" title="Imported before transaction-cost tracking"><i class="fa-solid fa-tag"></i> Legacy gross</span>'}
           <span class="risk-badge-mini" title="Actual Risk % of account value at entry">
             <i class="fa-solid fa-shield-halved"></i> Risk: ${actualRiskPct.toFixed(2)}%
           </span>
@@ -3282,7 +3216,7 @@ function recomputeTradeFromUpdateLog(trade) {
 }
 
 function validatePendingFillCash(order, fillShares, fillPrice) {
-  const required = buyNetCost(Math.max(0, sanitizeNumber(fillShares, 0)) * Math.max(0, sanitizeNumber(fillPrice, 0)));
+  const required = Math.max(0, sanitizeNumber(fillShares, 0)) * Math.max(0, sanitizeNumber(fillPrice, 0));
   const available = getAvailableCash(order);
   return { ok: required <= available + 1e-9, required, available };
 }
@@ -3405,11 +3339,6 @@ function renderHistory() {
     if (h.exitReason) {
       notesParts.push(`<div class="history-note" title="${escapeHTML(h.exitReason)}"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${escapeHTML(truncateText(h.exitReason))}</div>`);
     }
-    if (h.pnlBasis === 'legacy-gross') {
-      notesParts.push('<div class="history-note text-muted"><i class="fa-solid fa-tag"></i> Legacy gross record (costs not available)</div>');
-    } else if (h.pnlBasis === 'net') {
-      notesParts.push('<div class="history-note text-muted"><i class="fa-solid fa-receipt"></i> Net of configured costs</div>');
-    }
     const notesHtml = notesParts.length > 0 ? notesParts.join('') : '<span class="text-muted">—</span>';
     tr.innerHTML = `
       <td><strong>${escapeHTML(h.ticker)}</strong></td>
@@ -3523,24 +3452,22 @@ async function sellPositionByTicker(ticker) {
   }
 
   // Accumulate this partial sale into the trade's running exit VWAP
-  const saleCostBasis = trade.actualPrice * sharesSold;
   const saleProceeds = exitPrice * sharesSold;
-  const saleNetProceeds = sellNetProceeds(saleProceeds, saleCostBasis);
   const entryShares = Math.max(1, trade.entryShares || (trade.shares + (trade.soldShares || 0)));
-  const netEntryCostForSale = (trade.entryCost || (trade.actualPrice * entryShares)) * (sharesSold / entryShares);
+  const entryCostForSale = (trade.entryCost || (trade.actualPrice * entryShares)) * (sharesSold / entryShares);
   trade.soldShares = (trade.soldShares || 0) + sharesSold;
   trade.soldValue = (trade.soldValue || 0) + saleProceeds;
-  trade.soldNetValue = (trade.soldNetValue || 0) + saleNetProceeds;
+  trade.soldNetValue = (trade.soldNetValue || 0) + saleProceeds;
   trade.shares -= sharesSold;
-  adjustCashBalance(saleNetProceeds);
-  recordRealizedPnl(saleNetProceeds - netEntryCostForSale);
+  adjustCashBalance(saleProceeds);
+  recordRealizedPnl(saleProceeds - entryCostForSale);
 
   if (trade.shares > 0) {
     // Liquidity couldn't absorb the full sale — position stays open with fewer
     // shares. Trailing stop keeps updating on the remainder via the Daily Routine.
     saveState();
     await appAlert(
-      `${trade.ticker}: sold ${sharesSold} @ Rs. ${exitPrice.toFixed(2)} (net proceeds Rs. ${formatNPR(saleNetProceeds)}). ${trade.shares} share(s) still held — ` +
+      `${trade.ticker}: sold ${sharesSold} @ Rs. ${exitPrice.toFixed(2)} (proceeds Rs. ${formatNPR(saleProceeds)}). ${trade.shares} share(s) still held — ` +
       `log the rest as fills allow. The trailing stop keeps applying to the remaining shares in the meantime.`
     );
     return;
@@ -3573,8 +3500,7 @@ async function sellPositionByTicker(ticker) {
     netPnl: pnl,
     netEntryCost,
     netExitValue: netRevenue,
-    pnlBasis: 'net',
-    transactionCostsApplied: true,
+    pnlBasis: 'gross',
     entryReason: trade.entryReason || '',
     exitReason: trade.exitReasonDraft || ''
   };

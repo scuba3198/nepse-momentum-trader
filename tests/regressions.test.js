@@ -80,7 +80,7 @@ function loadApp(options = {}) {
   }
   vm.runInContext(`this.api = {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
-    buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
+    validatePendingFillCash, convertOrderToActiveTrade, getAvailableCash, recordPendingFill,
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
@@ -88,6 +88,7 @@ function loadApp(options = {}) {
     setState: value => { state = value; }, getState: () => state,
     setElementValue: (id, value) => { __testElements.get(id).value = value; },
     clickExecute: () => __testHandlers.get('execute-trade-btn:click')[0](),
+    clickPending: target => __testHandlers.get('pending-orders-list:click')[0]({ target }),
     getDialogMessages: () => __testDialogMessages.slice()
   };`, context);
   return context.api;
@@ -123,7 +124,6 @@ let weekendOrderCheck;
     ...orderApi.getState(),
     accountValue: 1000000,
     cashBalance: 1000000,
-    transactionCosts: { brokeragePct: 0, regulatoryFeePct: 0, dpChargePerSell: 0, capitalGainsTaxPct: 0 },
     indexBars: confirmedMarketBars(),
     activeTrades: [],
     pendingOrders: []
@@ -135,6 +135,50 @@ let weekendOrderCheck;
     assert.equal(orderApi.getState().pendingOrders.length, 1);
     assert.equal(orderApi.getState().pendingOrders[0].ticker, 'WEEKEND');
     assert.equal(orderApi.getDialogMessages().some(message => message.includes('only be placed on a NEPSE trading session')), false);
+  });
+}
+
+// A migrated unfilled order uses its old reservation only until the next
+// valid-session re-price, then available cash uses the new gross reservation.
+let pendingOrderRepriceCheck;
+{
+  const repriceApi = loadApp({
+    fixedDate: '2026-08-24T12:00:00+05:45', // Monday
+    setupEventListeners: true,
+    autoResolveDialogs: true
+  });
+  const migrated = repriceApi.normalizePersistedState({
+    accountValue: 1000,
+    cashBalance: 1000,
+    transactionCosts: { brokeragePct: 1, regulatoryFeePct: 0.5 },
+    pendingOrders: [{ ticker: 'REPRICE', plannedEntry: 100, atr: 1, plannedStop: 7.5,
+      shares: 10, filledShares: 0, filledValue: 0, filledCost: 0 }],
+    activeTrades: [],
+    history: []
+  });
+  migrated.state.indexBars = confirmedMarketBars();
+  assert.ok(Math.abs(migrated.state.pendingOrders[0].legacyReservedCash - 1015) < 1e-9);
+  repriceApi.setState(migrated.state);
+
+  const fields = {
+    '.pending-close-input': { value: '11' },
+    '.pending-atr-input': { value: '0.1' },
+    '.pending-fill-shares-input': { value: '' },
+    '.pending-fill-price-input': { value: '' }
+  };
+  const row = { querySelector: selector => fields[selector], querySelectorAll: () => [] };
+  const logButton = {
+    getAttribute: () => '0',
+    closest: selector => selector === '.pending-order-card' ? row : null
+  };
+  const target = { closest: selector => selector === '.log-today-btn' ? logButton : null };
+  pendingOrderRepriceCheck = repriceApi.clickPending(target).then(() => {
+    const order = repriceApi.getState().pendingOrders[0];
+    assert.equal(order.legacyReservedCash, null);
+    assert.equal(order.plannedEntry, 11);
+    assert.equal(order.shares, 40);
+    assert.equal(repriceApi.getAvailableCash(), repriceApi.getState().cashBalance -
+      (order.shares - order.filledShares) * order.plannedEntry);
   });
 }
 
@@ -254,7 +298,7 @@ let weekendOrderCheck;
 
 // A pending order's prior stop remains the replay floor on fill-day conversion.
 {
-  api.setState({ accountValue: 1000, cashBalance: 1000, transactionCosts: {}, activeTrades: [], pendingOrders: [] });
+  api.setState({ accountValue: 1000, cashBalance: 1000, activeTrades: [], pendingOrders: [] });
   const trade = api.convertOrderToActiveTrade({ ticker: 'FLOOR', plannedEntry: 100, atr: 1,
     plannedStop: 97.5, filledShares: 10, filledValue: 1000, filledCost: 1000,
     firstFillISO: '2026-01-03', firstFillDate: '1/3/2026', accountValueAtEntry: 1000 },
@@ -292,15 +336,6 @@ let weekendOrderCheck;
   assert.equal(trade.trailingStop, 97.5);
 }
 
-// Configured buy/sell costs are reflected in net cash/P&L helpers.
-{
-  api.setState({ accountValue: 1000, cashBalance: 1000, transactionCosts: {
-    brokeragePct: 1, regulatoryFeePct: 0.5, dpChargePerSell: 10, capitalGainsTaxPct: 10
-  }, pendingOrders: [], activeTrades: [] });
-  assert.equal(api.buyNetCost(100), 101.5);
-  assert.equal(api.sellNetProceeds(120, 100), 106.2);
-}
-
 // Import keeps an active ticker and deterministically drops its pending clash.
 {
   const result = api.normalizePersistedState({ accountValue: 1000,
@@ -311,25 +346,64 @@ let weekendOrderCheck;
   assert.equal(result.dropped.duplicateTickers, 1);
 }
 
+// Imported fee settings are ignored after preserving old record values and the
+// pending order's one-time legacy reservation until its next fill.
+{
+  const result = api.normalizePersistedState({
+    accountValue: 1000,
+    cashBalance: 1000,
+    transactionCosts: { brokeragePct: 1, regulatoryFeePct: 0.5, dpChargePerSell: 10, capitalGainsTaxPct: 10 },
+    pendingOrders: [{ ticker: 'LEGACY', plannedEntry: 10, atr: 1, plannedStop: 7.5, shares: 10,
+      filledShares: 0, filledValue: 0, filledCost: 0 }],
+    activeTrades: [{ ticker: 'HELD', actualPrice: 20, shares: 2, initialAtr: 1,
+      initialStop: 17.5, trailingStop: 20, highestClose: 20, lastClose: 20,
+      soldShares: 1, soldValue: 30, soldNetValue: 29, entryShares: 3,
+      entryGrossValue: 60, entryCost: 42 }],
+    history: [{ ticker: 'OLD', entryPrice: 10, exitPrice: 12, shares: 1,
+      totalRisk: 2, pnl: 1.25, returnPct: 12.5, netPnl: 1.25,
+      grossPnl: 2, netEntryCost: 10, netExitValue: 12 }]
+  });
+  assert.equal(result.state.transactionCosts, undefined);
+  assert.equal(result.state.transactionCostsConfigured, undefined);
+  assert.equal(result.state.cashBalance, 1000);
+  assert.equal(result.state.activeTrades[0].entryCost, 42);
+  assert.equal(result.state.activeTrades[0].soldNetValue, 29);
+  assert.equal(result.state.history[0].pnl, 1.25);
+  assert.equal(result.state.history[0].netEntryCost, 10);
+
+  const order = result.state.pendingOrders[0];
+  assert.ok(Math.abs(order.legacyReservedCash - 101.5) < 1e-9);
+  api.setState(result.state);
+  assert.ok(Math.abs(api.getAvailableCash() - 898.5) < 1e-9);
+  api.recordPendingFill(order, 1, 10, '2026-01-05');
+  assert.equal(order.legacyReservedCash, null);
+  assert.equal(order.filledCost, 10);
+  assert.equal(api.getAvailableCash(), 900);
+}
+
 // The affordability decision is made before a fill can mutate an order.
 {
-  api.setState({ accountValue: 100, cashBalance: 50, transactionCosts: { brokeragePct: 1, regulatoryFeePct: 0, dpChargePerSell: 0, capitalGainsTaxPct: 0 }, pendingOrders: [] });
+  api.setState({ accountValue: 100, cashBalance: 50, pendingOrders: [] });
   const order = { ticker: 'XYZ', shares: 10, filledShares: 0, plannedEntry: 10 };
   const check = api.validatePendingFillCash(order, 6, 10);
   assert.equal(check.ok, false);
   assert.equal(order.filledShares, 0);
 }
 
-// A zero net sale (fees can consume the entire gross proceeds) must remain
-// zero in the closed-trade accounting rather than falling back to gross.
+// Sale accounting uses gross proceeds for new records while preserving an
+// imported legacy explicit zero-net compatibility value.
 {
   const summary = api.summarizeExitAccounting({ actualPrice: 10, soldShares: 1,
+    soldValue: 10, soldNetValue: 10, entryCost: 10 });
+  assert.equal(summary.netRevenue, 10);
+  assert.equal(summary.pnl, 0);
+  const importedLegacy = api.summarizeExitAccounting({ actualPrice: 10, soldShares: 1,
     soldValue: 10, soldNetValue: 0, entryCost: 10 });
-  assert.equal(summary.netRevenue, 0);
-  assert.equal(summary.pnl, -10);
+  assert.equal(importedLegacy.netRevenue, 0);
+  assert.equal(importedLegacy.pnl, -10);
 }
 
-weekendOrderCheck
+Promise.all([weekendOrderCheck, pendingOrderRepriceCheck])
   .then(() => console.log('Regression checks passed.'))
   .catch(error => {
     console.error(error);
