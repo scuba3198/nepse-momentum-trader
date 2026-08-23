@@ -971,8 +971,8 @@ function loadState() {
 
 // The GitHub Action publishes a small, same-origin JSON file so the static
 // GitHub Pages app does not need to call NEPSE's protected cross-origin API.
-// A failed sync leaves existing positions/orders usable, but blocks new
-// entries because there is no reliable holiday source to validate a session.
+// A failed sync leaves planning available, but published-holiday checks may
+// be incomplete for session-dependent logs and streaks.
 async function loadPublishedHolidayCalendar() {
   const status = elements.sessionCalendarStatus;
   if (status) status.textContent = 'Loading the published NEPSE holiday calendar…';
@@ -1002,7 +1002,7 @@ async function loadPublishedHolidayCalendar() {
     automaticHolidayDates = new Set();
     holidayCalendarAvailable = false;
     if (status) {
-      status.textContent = 'Automatic holiday sync is unavailable; new day-orders are disabled until it is available again.';
+      status.textContent = 'Automatic holiday sync is unavailable; published-holiday checks may be incomplete.';
       status.style.color = 'var(--color-accent)';
     }
     console.warn('Failed to load the published NEPSE holiday calendar:', error);
@@ -1453,22 +1453,13 @@ function setupEventListeners() {
   elements.calcAtr.addEventListener('input', calculatePosition);
   elements.calcLiquidity.addEventListener('input', calculatePosition);
 
-  // --- Step 4: Place GTC Limit Order ---
+  // --- Step 4: Save Trade Plan ---
   elements.executeTradeBtn.addEventListener('click', async () => {
     const ticker = elements.calcTicker.value.trim().toUpperCase();
     const entry = parseFloat(elements.calcEntry.value);
     const atr = parseFloat(elements.calcAtr.value);
 
     if (!ticker || isNaN(entry) || isNaN(atr)) return;
-
-    if (!holidayCalendarReady) {
-      await appAlert('The NEPSE holiday calendar is still loading. Please try again in a moment.');
-      return;
-    }
-    if (!holidayCalendarAvailable) {
-      await appAlert('The automatic NEPSE holiday calendar is unavailable. New day-orders remain disabled until it loads successfully.');
-      return;
-    }
 
     // Hard gate: block new entries unless the market is confirmed and healthy.
     const macroGate = getMacroGateStatus();
@@ -1479,20 +1470,15 @@ function setupEventListeners() {
           : macroGate.marketState !== 'uptrend'
             ? 'New entries are blocked until a follow-through day confirms a new market uptrend.'
             : `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).`) +
-        `\n\nExisting positions remain managed normally. Expired pending day orders will not be resubmitted until the market state is confirmed and healthy.`
+        `\n\nExisting positions remain managed normally. Pending trade plans will stop rolling forward until the market state is confirmed and healthy.`
       );
-      return;
-    }
-
-    if (!isNepseTradingDay(new Date())) {
-      await appAlert('New day-orders can only be placed on a NEPSE trading session. Check the session calendar and try again on the next open session.');
       return;
     }
 
     // Guard: portfolio slots (count both open positions AND outstanding GTC orders reserved against them)
     const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
     if (slotsCommitted >= PORTFOLIO_SLOTS) {
-      await appAlert(`All ${PORTFOLIO_SLOTS} portfolio slots are filled or reserved by pending GTC orders. Close a position or cancel an order first.`);
+      await appAlert(`All ${PORTFOLIO_SLOTS} portfolio slots are filled or reserved by pending trade plans. Close a position or remove a plan first.`);
       return;
     }
 
@@ -1500,7 +1486,7 @@ function setupEventListeners() {
     // both conditions are true, the person sees the more specific/actionable
     // "already have this ticker" message rather than a misleading cash error.
     if (state.pendingOrders.some(o => o.ticker === ticker) || state.activeTrades.some(t => t.ticker === ticker)) {
-      await appAlert(`${ticker} already has a pending order or open position.`);
+      await appAlert(`${ticker} already has a pending trade plan or open position.`);
       return;
     }
 
@@ -1528,7 +1514,7 @@ function setupEventListeners() {
       return;
     }
 
-    // Step 4: place the GTC limit order (does not fill immediately)
+    // Step 4: save the local trade plan (broker execution happens separately)
     const entryReason = elements.calcReason.value.trim();
     state.pendingOrders.push({
       ticker,
@@ -1562,7 +1548,7 @@ function setupEventListeners() {
     saveState();
     queueMotionTransfer(elements.executeTradeBtn, () => findTradeCard(ticker, 'pending'));
 
-    await appAlert(`Day Order placed: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. It cancels at session end each day — log the close & ATR daily to re-price and resubmit (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts, or until the close breaks the current stop or the market filter closes).`);
+    await appAlert(`Trade plan saved: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. This app does not place orders — submit the day order through your broker's TMS during an open NEPSE session. Then log each session's close, ATR, and fills here to calculate the next plan (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts).`);
   });
 
   // --- Pending Orders: log a trading day, cancel, or mark filled ---
@@ -1578,11 +1564,11 @@ function setupEventListeners() {
       const hasFill = order.filledShares > 0;
 
       const confirmMsg = hasFill
-        ? `${order.filledShares} of ${order.shares} share(s) have already been filled on this order.\n\n` +
-          `Cancelling will KEEP the ${order.filledShares} filled share(s) as an active trade (at their VWAP of ` +
-          `Rs. ${(order.filledValue / order.filledShares).toFixed(2)}) and drop only the unfilled remainder ` +
-          `(${order.shares - order.filledShares}). Continue?`
-        : `Cancel the pending order for ${order.ticker}?`;
+        ? `${order.filledShares} of ${order.shares} share(s) have already been filled.\n\n` +
+          `Removing this plan will KEEP the ${order.filledShares} filled share(s) as an active trade (at their VWAP of ` +
+          `Rs. ${(order.filledValue / order.filledShares).toFixed(2)}) and remove only the unfilled remainder ` +
+          `(${order.shares - order.filledShares}) from this tracker. It will not cancel a live order in your broker's TMS. Continue?`
+        : `Remove the saved trade plan for ${order.ticker}? This will not cancel a live order in your broker's TMS.`;
 
       if (await appConfirm(confirmMsg)) {
         // Re-resolve by ticker rather than trusting the idx captured before the
@@ -1596,7 +1582,7 @@ function setupEventListeners() {
         saveState();
         renderAll();
         if (hasFill) {
-          await appAlert(`${currentOrder.ticker}: ${currentOrder.filledShares} filled share(s) moved to Active Trades. Unfilled remainder cancelled.`);
+          await appAlert(`${currentOrder.ticker}: ${currentOrder.filledShares} filled share(s) moved to Active Trades. The unfilled remainder was removed from this tracker; cancel any live TMS order yourself.`);
         }
       }
       return;
@@ -1722,9 +1708,9 @@ function setupEventListeners() {
         await appAlert(
           `${order.ticker}: close (Rs. ${todayClose.toFixed(2)}) fell below today's stop (Rs. ${order.plannedStop.toFixed(2)}).\n\n` +
           (hadFill
-            ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder (${order.shares - order.filledShares}) is cancelled.` +
+            ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder (${order.shares - order.filledShares}) was removed from this tracker; cancel any live TMS order yourself.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
-            : `No shares had been filled — order cancelled per strategy rules.`)
+            : `No shares had been filled, so the plan was closed. Cancel any live TMS order yourself.`)
         );
         return;
       }
@@ -1742,11 +1728,11 @@ function setupEventListeners() {
         clearPendingOrderInputs(row);
         saveState();
         await appAlert(
-          `${order.ticker}: the market filter is no longer confirmed, so tomorrow's day order was not submitted.\n\n` +
+          `${order.ticker}: the market filter is no longer confirmed, so no trade plan was prepared for tomorrow.\n\n` +
           (hadFill
-            ? `${order.filledShares} filled share(s) were moved to Active Trades; the unfilled remainder was cancelled.` +
+            ? `${order.filledShares} filled share(s) were moved to Active Trades; the unfilled remainder was removed from this tracker. Cancel any live TMS order yourself.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
-            : 'Nothing was filled, so the pending order was cancelled.')
+            : 'Nothing was filled, so the plan was closed. Cancel any live TMS order yourself.')
         );
         return;
       }
@@ -1767,14 +1753,14 @@ function setupEventListeners() {
         await appAlert(
           `${order.ticker}: order window closed after ${MAX_DAY_ORDER_ATTEMPTS} trading days.\n\n` +
           (hadFill
-            ? `${order.filledShares} of ${order.shares} planned shares were filled and converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder is cancelled.` +
+            ? `${order.filledShares} of ${order.shares} planned shares were filled and converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder was removed from this tracker; cancel any live TMS order yourself.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
-            : `Nothing was filled — order cancelled per strategy rules.`)
+            : `Nothing was filled, so the plan was closed. Cancel any live TMS order yourself.`)
         );
         return;
       }
 
-      // Step 4: no breach, still within the window — roll forward to tomorrow's day-order.
+      // Step 4: no breach, still within the window — calculate tomorrow's day-order plan.
       // New price = today's close. New stop = new price − 2.5×today's ATR. Risk-per-share is
       // always 2.5×ATR by construction, so the target share count only depends on ATR, not price —
       // it's recomputed fresh each day so the 1%-of-deployable-cash risk promise stays accurate no matter
@@ -1814,8 +1800,8 @@ function setupEventListeners() {
         saveState();
         await appAlert(
           cappedByCash
-            ? `${order.ticker}: no cash available to size any shares for this order. Order cancelled.`
-            : `${order.ticker}: today's ATR is too large to size any shares within the 1% risk budget. Order cancelled.`
+            ? `${order.ticker}: no cash is available to size this plan, so it was closed.`
+            : `${order.ticker}: today's ATR is too large to size any shares within the 1% risk budget, so the plan was closed.`
         );
         return;
       }
@@ -1830,7 +1816,7 @@ function setupEventListeners() {
         clearPendingOrderInputs(row);
         saveState();
         await appAlert(
-          `${order.ticker}: today's re-priced risk math only supports ${newTargetShares} share(s), below the ${MIN_LOT_SIZE}-share practical minimum. Order cancelled.`
+          `${order.ticker}: today's re-priced risk math only supports ${newTargetShares} share(s), below the ${MIN_LOT_SIZE}-share practical minimum, so the plan was closed.`
         );
         return;
       }
@@ -1859,7 +1845,7 @@ function setupEventListeners() {
       clearPendingOrderInputs(row);
       saveState();
       await appAlert(
-        `${order.ticker}: rolled forward for tomorrow — new order: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
+        `${order.ticker}: plan ready for tomorrow — place through your broker's TMS: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
         `stop Rs. ${newStop.toFixed(2)} (${MAX_DAY_ORDER_ATTEMPTS - order.daysWaiting} day(s) left in the window).` +
         (cappedByCash
           ? `\n\nNote: today's risk math targeted a larger size, but available cash capped it at ${order.shares} share(s) to avoid over-committing capital.`
@@ -2093,11 +2079,9 @@ function calculatePosition() {
       elements.liquidityCheckTile.style.display = 'none';
     }
 
-    // Only enable placing the GTC order if macro filter passes AND slots are available AND
-    // cash is sufficient AND the position clears the practical minimum lot size.
-    // Wait for the automatic holiday calendar to settle so a page-load race
-    // cannot allow an order on a published NEPSE holiday.
-    elements.executeTradeBtn.disabled = !holidayCalendarReady || !holidayCalendarAvailable || !macroOk || !slotsAvailable || !cashOk || belowMinLot;
+    // Saving a plan is available on any day; session checks apply when market
+    // activity is logged, not while planning.
+    elements.executeTradeBtn.disabled = !macroOk || !slotsAvailable || !cashOk || belowMinLot;
   } else {
     setMotionText(elements.resPositionSize, '0 Shares (Risk per share too high)');
     elements.resPositionSize.style.color = '';
@@ -2426,8 +2410,8 @@ function renderScreenerTable() {
 // day — DISTRIBUTION_FTD_MIN_PCT or more — on volume higher than the prior
 // bar) resets the window: only bars from the FTD onward are considered.
 // This is a hard gate on NEW entries once severe ("Under Distribution"):
-// Place Day Order is blocked until a new FTD confirms the market. Expired
-// pending day orders are not resubmitted; active positions remain unaffected.
+// Saving a trade plan is blocked until a new FTD confirms the market. Pending
+// plans stop rolling forward; active positions remain unaffected.
 // --------------------------------------------------------------------------
 const DISTRIBUTION_WINDOW_DAYS = 25;          // sessions after which a distribution day expires
 const DISTRIBUTION_MIN_DECLINE_PCT = 0.2;
@@ -2441,8 +2425,8 @@ const MIN_INDEX_HISTORY_BARS = 120;             // roughly 6 months of NEPSE ses
 // Hard gate: once the trailing distribution-day count hits the severe
 // threshold ("Under Distribution"), new capital commitments are blocked
 // outright until a new FTD confirms the market. "Caution" (3-4) stays
-// advisory only. Expired pending orders are not resubmitted; active positions
-// keep trailing/exiting normally.
+// advisory only. Pending plans stop rolling forward; active positions keep
+// trailing/exiting normally.
 function getMacroGateStatus() {
   const { count, level, state: marketState } = computeDistributionDays(state.indexBars);
   const insufficientHistory = !Array.isArray(state.indexBars) || state.indexBars.length < MIN_INDEX_HISTORY_BARS;
@@ -2719,7 +2703,7 @@ function renderPendingOrders() {
     elements.pendingOrdersList.innerHTML = `
       <div class="empty-state">
         <i class="fa-solid fa-clock"></i>
-        <p>No outstanding orders. Use the calculator to place one.</p>
+        <p>No saved trade plans. Use the calculator to create one.</p>
       </div>
     `;
     return;
@@ -2749,7 +2733,7 @@ function renderPendingOrders() {
 
       <div class="trade-card-grid">
         <div>
-          <span class="card-grid-lbl">Today's Order Price</span>
+          <span class="card-grid-lbl">Planned Order Price</span>
           <span class="card-grid-val">Rs. ${formatNPR(order.plannedEntry)}</span>
         </div>
         <div>
@@ -2757,7 +2741,7 @@ function renderPendingOrders() {
           <span class="card-grid-val" style="color: var(--color-accent);">Rs. ${formatNPR(order.plannedStop)}</span>
         </div>
         <div>
-          <span class="card-grid-lbl">First Placed On</span>
+          <span class="card-grid-lbl">Plan Saved On</span>
           <span class="card-grid-val">${escapeHTML(order.placedDate)}</span>
         </div>
       </div>
@@ -2768,7 +2752,7 @@ function renderPendingOrders() {
       </p>` : ''}
 
       <p style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.5rem 0 0;">
-        Day order — cancels at session end. Log today's close &amp; ATR below to re-price and resubmit for tomorrow while the market remains confirmed.
+        This tracker does not submit orders. Place the day order in your TMS, then log today's close, ATR, and fills below to calculate the next session's plan.
       </p>
 
       ${loggedToday ? `<p class="text-muted" style="font-size: 0.72rem; margin: 0.45rem 0 0;">Logged for ${escapeHTML(order.lastLoggedDate || displayDateFromISO(todayISODateString()))}; it can be logged again on the next trading session.</p>` : ''}
@@ -2823,7 +2807,7 @@ function renderPendingOrders() {
           <i class="fa-solid fa-calendar-check"></i> ${loggedToday ? 'Logged Today' : 'Log Today &amp; Re-Price'}
         </button>
         <button class="btn btn-secondary btn-danger-action cancel-order-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
-          <i class="fa-solid fa-xmark"></i> Cancel
+          <i class="fa-solid fa-xmark"></i> Remove Plan
         </button>
       </div>
     `;

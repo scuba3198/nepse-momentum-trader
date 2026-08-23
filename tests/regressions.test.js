@@ -12,6 +12,7 @@ function loadApp() {
     querySelector: () => null,
     querySelectorAll: () => [],
     classList: { add: noop, remove: noop },
+    dataset: {},
     style: {},
     setAttribute: noop,
     appendChild: noop,
@@ -44,10 +45,16 @@ function loadApp() {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
-    getAvailableCash, getMaxRiskPerPosition,
+    getAvailableCash, getMaxRiskPerPosition, calculatePosition,
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
+    setPlannerInputs: (ticker, entry, atr) => {
+      elements.calcTicker.value = ticker;
+      elements.calcEntry.value = entry;
+      elements.calcAtr.value = atr;
+    },
+    isPlanButtonDisabled: () => elements.executeTradeBtn.disabled,
     setState: value => { state = value; }, getState: () => state
   };`, context);
   return context.api;
@@ -83,6 +90,21 @@ function confirmedMarketBars(count = 120) {
   const meaningfulDecline = { date: '121', close: tinyDecline.close * 0.997, volume: 202 };
   assert.equal(api.computeDistributionDays([...bars, tinyDecline]).count, 0);
   assert.equal(api.computeDistributionDays([...bars, tinyDecline, meaningfulDecline]).count, 1);
+}
+
+// Saving a local plan does not depend on the NEPSE holiday calendar.
+{
+  api.setState({
+    accountValue: 1000000,
+    cashBalance: 1000000,
+    activeTrades: [],
+    pendingOrders: [],
+    transactionCosts: {},
+    indexBars: confirmedMarketBars()
+  });
+  api.setPlannerInputs('TEST', 100, 5);
+  api.calculatePosition();
+  assert.equal(api.isPlanButtonDisabled(), false);
 }
 
 // The intro is remembered only after it has been successfully entered.
