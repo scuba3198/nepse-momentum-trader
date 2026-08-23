@@ -47,7 +47,7 @@
         </div>
         <div class="hero-meta-item">
           <span class="hero-meta-label">Risk</span>
-          <span class="hero-meta-value">1% / trade &middot; 5% max exposure</span>
+          <span class="hero-meta-value">1% modeled risk / trade &middot; up to ~5% total</span>
         </div>
       </div>
     </div>
@@ -93,12 +93,16 @@
     </div>
     <div class="header-hero">
       <div class="hero-stat">
-        <span class="stat-label">Deployable Cash</span>
+        <span class="stat-label">Available Cash</span>
         <div class="hero-value-group">
           <span class="currency">NPR</span>
           <span id="header-account-value" class="hero-value">1,000,000.00</span>
-          <button id="edit-account-btn" title="Edit Deployable Cash"><i class="fa-solid fa-pen-to-square"></i></button>
+          <button id="edit-account-btn" title="Edit Strategy Capital and Available Cash"><i class="fa-solid fa-pen-to-square"></i></button>
         </div>
+      </div>
+      <div class="hero-stat hero-stat-secondary">
+        <span class="stat-label">NEPSE Strategy Capital</span>
+        <span class="stat-value-group"><span class="currency">NPR</span><span id="header-strategy-capital">1,000,000.00</span></span>
       </div>
       <div class="hero-stat hero-stat-secondary">
         <span class="stat-label">Portfolio Slots</span>
@@ -260,7 +264,7 @@
 
           <div class="calculator-results">
             <div class="result-tile">
-              <span class="result-label">Max Risk per Position (1%)</span>
+              <span class="result-label">Max Risk (1% of Strategy Capital)</span>
               <span class="result-value" id="res-planned-risk">Rs. 0.00</span>
             </div>
             <div class="result-tile">
@@ -280,7 +284,7 @@
               <span class="result-value" id="res-capital-check">Rs. 0.00 / Rs. 0.00</span>
             </div>
             <div class="result-tile" id="capital-pct-tile" style="display:none;">
-              <span class="result-label">Position Capital as % of Deployable Cash</span>
+              <span class="result-label">Position Capital as % of Available Cash</span>
               <span class="result-value" id="res-capital-pct">—</span>
             </div>
             <div class="result-tile" id="liquidity-check-tile" style="display:none;">
@@ -420,16 +424,27 @@
        transform for its entrance animation, and transformed ancestors
        break position:fixed containment (fixed elements inside would
        position relative to that ancestor, not the real viewport). -->
-  <!-- 1. Edit Deployable Cash Modal -->
+  <!-- 1. Edit Strategy Capital / Available Cash Modal -->
   <div class="modal-overlay" id="account-modal">
     <div class="modal-content glass-panel">
-      <h3>Set Deployable Cash</h3>
-      <p class="modal-desc">Enter the cash you currently have available for new trades. Do not include existing holdings. The app sizes each position at <strong>1% risk</strong> and tracks the remaining cash as orders fill.</p>
+      <h3>Set Strategy Capital &amp; Cash</h3>
+      <p class="modal-desc">Strategy capital is the money assigned to this NEPSE strategy, including tracked positions. Available cash is only what can fund new orders. If money moves to another investment, reduce both values by the amount withdrawn.</p>
       <div class="input-group">
-        <label for="modal-account-value">Cash Available to Deploy (NPR)</label>
+        <label for="modal-account-value">NEPSE Strategy Capital (NPR)</label>
         <div class="input-wrapper number-spin-wrap">
           <span class="input-prefix">Rs.</span>
-          <input type="number" id="modal-account-value" min="0" placeholder="1000000.00" step="100">
+          <input type="number" id="modal-account-value" min="0.01" placeholder="1000000.00" step="100">
+          <div class="spin-buttons">
+            <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
+            <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
+          </div>
+        </div>
+      </div>
+      <div class="input-group">
+        <label for="modal-cash-available">Cash Available to Deploy (NPR)</label>
+        <div class="input-wrapper number-spin-wrap">
+          <span class="input-prefix">Rs.</span>
+          <input type="number" id="modal-cash-available" min="0" placeholder="1000000.00" step="100">
           <div class="spin-buttons">
             <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
             <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>

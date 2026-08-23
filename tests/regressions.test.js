@@ -45,7 +45,7 @@ function loadApp() {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
-    getAvailableCash, getMaxRiskPerPosition, calculatePosition,
+    getAvailableCash, getMaxRiskPerPosition, getRepricedPendingStop, calculatePosition,
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
@@ -283,15 +283,22 @@ function confirmedMarketBars(count = 120) {
   assert.equal(summary.pnl, -10);
 }
 
-// Risk sizing uses only uncommitted cash, never the separate legacy equity field.
+// Strategy capital sets risk; uncommitted cash remains a separate affordability cap.
 {
-  api.setState({ accountValue: 9999, cashBalance: 1000, transactionCosts: {}, activeTrades: [
+  api.setState({ accountValue: 10000, cashBalance: 1000, transactionCosts: {}, activeTrades: [
     { ticker: 'HELD', actualPrice: 500, shares: 10 }
   ], pendingOrders: [
     { ticker: 'WAIT', shares: 20, filledShares: 0, plannedEntry: 10 }
   ] });
   assert.equal(api.getAvailableCash(), 800);
-  assert.equal(api.getMaxRiskPerPosition(), 8);
+  assert.equal(api.getMaxRiskPerPosition(), 100);
+}
+
+// A partial fill owns real shares, so its stop may rise but never loosen.
+{
+  assert.equal(api.getRepricedPendingStop({ filledShares: 5, plannedStop: 97.5 }, 100, 10), 97.5);
+  assert.equal(api.getRepricedPendingStop({ filledShares: 5, plannedStop: 97.5 }, 120, 5), 107.5);
+  assert.equal(api.getRepricedPendingStop({ filledShares: 0, plannedStop: 97.5 }, 100, 10), 75);
 }
 
 console.log('Regression checks passed.');
