@@ -12,7 +12,6 @@ function loadApp() {
     querySelector: () => null,
     querySelectorAll: () => [],
     classList: { add: noop, remove: noop },
-    dataset: {},
     style: {},
     setAttribute: noop,
     appendChild: noop,
@@ -45,16 +44,9 @@ function loadApp() {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
-    getAvailableCash, getMaxRiskPerPosition, getRepricedPendingStop, calculatePosition,
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
-    setPlannerInputs: (ticker, entry, atr) => {
-      elements.calcTicker.value = ticker;
-      elements.calcEntry.value = entry;
-      elements.calcAtr.value = atr;
-    },
-    isPlanButtonDisabled: () => elements.executeTradeBtn.disabled,
     setState: value => { state = value; }, getState: () => state
   };`, context);
   return context.api;
@@ -90,21 +82,6 @@ function confirmedMarketBars(count = 120) {
   const meaningfulDecline = { date: '121', close: tinyDecline.close * 0.997, volume: 202 };
   assert.equal(api.computeDistributionDays([...bars, tinyDecline]).count, 0);
   assert.equal(api.computeDistributionDays([...bars, tinyDecline, meaningfulDecline]).count, 1);
-}
-
-// Saving a local plan does not depend on the NEPSE holiday calendar.
-{
-  api.setState({
-    accountValue: 1000000,
-    cashBalance: 1000000,
-    activeTrades: [],
-    pendingOrders: [],
-    transactionCosts: {},
-    indexBars: confirmedMarketBars()
-  });
-  api.setPlannerInputs('TEST', 100, 5);
-  api.calculatePosition();
-  assert.equal(api.isPlanButtonDisabled(), false);
 }
 
 // The intro is remembered only after it has been successfully entered.
@@ -281,24 +258,6 @@ function confirmedMarketBars(count = 120) {
     soldValue: 10, soldNetValue: 0, entryCost: 10 });
   assert.equal(summary.netRevenue, 0);
   assert.equal(summary.pnl, -10);
-}
-
-// Strategy capital sets risk; uncommitted cash remains a separate affordability cap.
-{
-  api.setState({ accountValue: 10000, cashBalance: 1000, transactionCosts: {}, activeTrades: [
-    { ticker: 'HELD', actualPrice: 500, shares: 10 }
-  ], pendingOrders: [
-    { ticker: 'WAIT', shares: 20, filledShares: 0, plannedEntry: 10 }
-  ] });
-  assert.equal(api.getAvailableCash(), 800);
-  assert.equal(api.getMaxRiskPerPosition(), 100);
-}
-
-// A partial fill owns real shares, so its stop may rise but never loosen.
-{
-  assert.equal(api.getRepricedPendingStop({ filledShares: 5, plannedStop: 97.5 }, 100, 10), 97.5);
-  assert.equal(api.getRepricedPendingStop({ filledShares: 5, plannedStop: 97.5 }, 120, 5), 107.5);
-  assert.equal(api.getRepricedPendingStop({ filledShares: 0, plannedStop: 97.5 }, 100, 10), 75);
 }
 
 console.log('Regression checks passed.');

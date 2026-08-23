@@ -47,7 +47,7 @@
         </div>
         <div class="hero-meta-item">
           <span class="hero-meta-label">Risk</span>
-          <span class="hero-meta-value">1% modeled risk / trade &middot; up to ~5% total</span>
+          <span class="hero-meta-value">1% / trade &middot; 5% max exposure</span>
         </div>
       </div>
     </div>
@@ -93,16 +93,12 @@
     </div>
     <div class="header-hero">
       <div class="hero-stat">
-        <span class="stat-label">Available Cash</span>
+        <span class="stat-label">Account Value</span>
         <div class="hero-value-group">
           <span class="currency">NPR</span>
           <span id="header-account-value" class="hero-value">1,000,000.00</span>
-          <button id="edit-account-btn" title="Edit Strategy Capital and Available Cash"><i class="fa-solid fa-pen-to-square"></i></button>
+          <button id="edit-account-btn" title="Edit Account Value"><i class="fa-solid fa-pen-to-square"></i></button>
         </div>
-      </div>
-      <div class="hero-stat hero-stat-secondary">
-        <span class="stat-label">NEPSE Strategy Capital</span>
-        <span class="stat-value-group"><span class="currency">NPR</span><span id="header-strategy-capital">1,000,000.00</span></span>
       </div>
       <div class="hero-stat hero-stat-secondary">
         <span class="stat-label">Portfolio Slots</span>
@@ -116,10 +112,10 @@
     <div class="card-header">
       <span class="step-num">00</span>
       <h2>Distribution Day Counter</h2>
-      <span class="tooltip" data-tooltip="A distribution day = index closes at least 0.2% lower on higher volume than the prior day. The counter runs a market-state machine (Correction -> Rally Attempt -> Confirmed Uptrend) starting from the first bar you upload, so it requires at least 120 sessions (about 6 months), starting before the last major swing low. 0-2 = Normal. 3-4 = Caution, be selective (advisory only). 5+ = Under Distribution — new entries are hard-blocked until a new Follow-Through Day confirms the market. A Follow-Through Day occurs on day 4+ of a rally attempt with a roughly 1.5% or greater gain on higher volume, without undercutting the attempt's low. If the gate closes, pending plans stop rolling forward; filled shares and open positions remain managed normally."><i class="fa-solid fa-circle-info"></i></span>
+      <span class="tooltip" data-tooltip="A distribution day = index closes at least 0.2% lower on higher volume than the prior day. The counter runs a market-state machine (Correction -> Rally Attempt -> Confirmed Uptrend) starting from the first bar you upload, so it requires at least 120 sessions (about 6 months), starting before the last major swing low. 0-2 = Normal. 3-4 = Caution, be selective (advisory only). 5+ = Under Distribution — new entries are hard-blocked until a new Follow-Through Day confirms the market. A Follow-Through Day occurs on day 4+ of a rally attempt with a roughly 1.5% or greater gain on higher volume, without undercutting the attempt's low. If the gate closes, expired pending day orders are not resubmitted; filled shares and open positions remain managed normally."><i class="fa-solid fa-circle-info"></i></span>
     </div>
     <div class="card-body">
-      <p class="macro-desc">Upload <strong>at least 120 sessions (about 6 months)</strong> of NEPSE index price CSV (adjusted) — starting before the last major swing low — to compute the distribution day count. Shorter history hard-blocks new entries because it can begin mid-cycle and misread the market state. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>. At 5+ distribution days ("Under Distribution"), new trade plans are hard-blocked until a Follow-Through Day confirms a new uptrend.</p>
+      <p class="macro-desc">Upload <strong>at least 120 sessions (about 6 months)</strong> of NEPSE index price CSV (adjusted) — starting before the last major swing low — to compute the distribution day count. Shorter history hard-blocks new entries because it can begin mid-cycle and misread the market state. Export it from <a href="https://nepsealpha.com/nepse-data" target="_blank" rel="noopener">nepsealpha.com/nepse-data</a>. At 5+ distribution days ("Under Distribution"), new day-orders are hard-blocked until a Follow-Through Day confirms a new uptrend.</p>
       <div style="display:flex; gap:0.5rem; margin-top:0.6rem; flex-wrap:wrap;">
         <button id="index-bars-upload-btn" class="btn btn-secondary">Upload CSV</button>
         <input type="file" id="index-bars-file-input" accept=".csv,text/csv" style="display:none;" />
@@ -264,7 +260,7 @@
 
           <div class="calculator-results">
             <div class="result-tile">
-              <span class="result-label">Max Risk (1% of Strategy Capital)</span>
+              <span class="result-label">Max Risk per Position (1%)</span>
               <span class="result-value" id="res-planned-risk">Rs. 0.00</span>
             </div>
             <div class="result-tile">
@@ -284,7 +280,7 @@
               <span class="result-value" id="res-capital-check">Rs. 0.00 / Rs. 0.00</span>
             </div>
             <div class="result-tile" id="capital-pct-tile" style="display:none;">
-              <span class="result-label">Position Capital as % of Available Cash</span>
+              <span class="result-label">Position Capital as % of Account</span>
               <span class="result-value" id="res-capital-pct">—</span>
             </div>
             <div class="result-tile" id="liquidity-check-tile" style="display:none;">
@@ -294,27 +290,27 @@
           </div>
 
           <div class="calculator-action">
-            <button id="execute-trade-btn" class="btn btn-success" disabled><i class="fa-solid fa-file-signature"></i> Save Trade Plan</button>
+            <button id="execute-trade-btn" class="btn btn-success" disabled><i class="fa-solid fa-file-signature"></i> Place Day Order</button>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- COLUMN 2: PENDING TRADE PLANS, ACTIVE TRADES & DAILY ROUTINE -->
+    <!-- COLUMN 2: PENDING ORDERS, ACTIVE TRADES & DAILY ROUTINE -->
     <section class="grid-column">
-      <!-- STEP 03: PENDING TRADE PLANS (strategy step 4) -->
+      <!-- STEP 03: PENDING GTC LIMIT ORDERS (strategy step 4) -->
       <div class="dashboard-card glass-panel" id="pending-orders-section">
         <div class="card-header">
           <span class="step-num">03</span>
-          <h2>Pending Trade Plans (Daily Re-Priced)</h2>
+          <h2>Pending Orders (Daily Re-Priced)</h2>
           <span class="trade-count-badge" id="pending-orders-count">0 / 5 Reserved</span>
-          <span class="tooltip" data-tooltip="This tracker does not submit orders. Place each day order through your broker's TMS, then log the close, ATR, and fills here to calculate the next session's plan, up to 5 attempts."><i class="fa-solid fa-circle-info"></i></span>
+          <span class="tooltip" data-tooltip="Day orders — cancel at session end each day. Log the close & ATR daily to re-price and resubmit at the new close (target size recomputed from fresh ATR), up to 5 attempts, or until the close breaks the current stop, or the Macro Filter fails."><i class="fa-solid fa-circle-info"></i></span>
         </div>
         <div class="card-body">
           <div class="portfolio-list" id="pending-orders-list">
             <div class="empty-state">
               <i class="fa-solid fa-clock"></i>
-              <p>No saved trade plans. Use the calculator to create one.</p>
+              <p>No outstanding GTC orders. Use the calculator to place one.</p>
             </div>
           </div>
         </div>
@@ -424,27 +420,16 @@
        transform for its entrance animation, and transformed ancestors
        break position:fixed containment (fixed elements inside would
        position relative to that ancestor, not the real viewport). -->
-  <!-- 1. Edit Strategy Capital / Available Cash Modal -->
+  <!-- 1. Edit Account Value Modal -->
   <div class="modal-overlay" id="account-modal">
     <div class="modal-content glass-panel">
-      <h3>Set Strategy Capital &amp; Cash</h3>
-      <p class="modal-desc">Strategy capital is the money assigned to this NEPSE strategy, including tracked positions. Available cash is only what can fund new orders. If money moves to another investment, reduce both values by the amount withdrawn.</p>
+      <h3>Adjust Account Value</h3>
+      <p class="modal-desc">Used to calculate the maximum risk per position: <strong>1% of account value per position</strong> (up to <strong>5%</strong> total with all 5 slots filled). Transaction-cost rates are estimates you control; zero means no cost configured.</p>
       <div class="input-group">
-        <label for="modal-account-value">NEPSE Strategy Capital (NPR)</label>
+        <label for="modal-account-value">Account Value (NPR)</label>
         <div class="input-wrapper number-spin-wrap">
           <span class="input-prefix">Rs.</span>
-          <input type="number" id="modal-account-value" min="0.01" placeholder="1000000.00" step="100">
-          <div class="spin-buttons">
-            <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
-            <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>
-          </div>
-        </div>
-      </div>
-      <div class="input-group">
-        <label for="modal-cash-available">Cash Available to Deploy (NPR)</label>
-        <div class="input-wrapper number-spin-wrap">
-          <span class="input-prefix">Rs.</span>
-          <input type="number" id="modal-cash-available" min="0" placeholder="1000000.00" step="100">
+          <input type="number" id="modal-account-value" placeholder="1000000.00" step="100">
           <div class="spin-buttons">
             <button type="button" class="spin-btn spin-up" tabindex="-1" aria-label="Increase"></button>
             <button type="button" class="spin-btn spin-down" tabindex="-1" aria-label="Decrease"></button>

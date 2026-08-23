@@ -5,7 +5,8 @@
 // Strategy Constants
 const PORTFOLIO_SLOTS = 5;
 const DEFAULT_ACCOUNT_VALUE = 1000000.00;
-const RISK_PER_POSITION_PCT = 0.01; // 1% of NEPSE strategy capital, per position
+const RISK_PER_POSITION_PCT = 0.01;                                        // 1% of account value, per position
+const TOTAL_PORTFOLIO_RISK_PCT = RISK_PER_POSITION_PCT * PORTFOLIO_SLOTS;  // 5% with all slots filled
 const ATR_MULTIPLIER = 2.5;
 const MIN_LOT_SIZE = 10; // NEPSE: odd lots under 10 shares are a hassle to buy/sell — don't recommend them
 const MAX_DAY_ORDER_ATTEMPTS = 5;            // Give up after 5 daily re-priced attempts if never filled
@@ -47,12 +48,10 @@ let holidayCalendarAvailable = false;
 
 // Application State
 let state = {
-  // NEPSE strategy capital, persisted under the legacy accountValue key so
-  // old exports still import cleanly. Fills do not change it; realized P&L and
-  // explicit deposits/withdrawals do.
   accountValue: DEFAULT_ACCOUNT_VALUE,
-  // Actual settled cash. This ledger changes when a fill or sale moves cash;
-  // pending unfilled shares are reserved separately by getAvailableCash().
+  // Actual settled cash.  Account value is the equity/risk-sizing base;
+  // this ledger changes when a fill or sale actually moves cash.  Pending
+  // unfilled shares are reserved separately by getAvailableCash().
   cashBalance: DEFAULT_ACCOUNT_VALUE,
   realizedPnl: 0,
   transactionCosts: { ...DEFAULT_TRANSACTION_COSTS },
@@ -71,7 +70,6 @@ let state = {
 const elements = {
   // Header
   headerAccountValue: document.getElementById('header-account-value'),
-  headerStrategyCapital: document.getElementById('header-strategy-capital'),
   headerSlotsCount: document.getElementById('header-slots-count'),
   editAccountBtn: document.getElementById('edit-account-btn'),
   resetAppBtn: document.getElementById('reset-app-btn'),
@@ -144,7 +142,6 @@ const elements = {
   // Modals
   accountModal: document.getElementById('account-modal'),
   modalAccountValue: document.getElementById('modal-account-value'),
-  modalCashAvailable: document.getElementById('modal-cash-available'),
   modalBrokeragePct: document.getElementById('modal-brokerage-pct'),
   modalRegulatoryFeePct: document.getElementById('modal-regulatory-fee-pct'),
   modalDpCharge: document.getElementById('modal-dp-charge'),
@@ -425,17 +422,6 @@ function getAvailableCash(excludeOrder = null) {
   return Math.max(0, cashBalance - getPendingReservedCash(excludeOrder));
 }
 
-function getMaxRiskPerPosition() {
-  return Math.max(0, sanitizeNumber(state.accountValue, 0)) * RISK_PER_POSITION_PCT;
-}
-
-function getRepricedPendingStop(order, close, atr) {
-  const candidateStop = close - (ATR_MULTIPLIER * atr);
-  return order.filledShares > 0
-    ? Math.max(order.plannedStop, candidateStop)
-    : candidateStop;
-}
-
 function adjustCashBalance(delta) {
   const amount = sanitizeNumber(delta, 0);
   state.cashBalance = sanitizeNumber(state.cashBalance, state.accountValue) + amount;
@@ -444,8 +430,8 @@ function adjustCashBalance(delta) {
 function recordRealizedPnl(pnl) {
   const realized = sanitizeNumber(pnl, 0);
   state.realizedPnl = sanitizeNumber(state.realizedPnl, 0) + realized;
-  // Realized gains/losses remain inside this strategy until the user records
-  // a withdrawal by reducing both strategy capital and available cash.
+  // Account value is the equity base used for future risk sizing.  Apply each
+  // tranche's realized P&L exactly once, including partial exits.
   state.accountValue = Math.max(0, sanitizeNumber(state.accountValue, DEFAULT_ACCOUNT_VALUE) + realized);
 }
 
@@ -981,8 +967,8 @@ function loadState() {
 
 // The GitHub Action publishes a small, same-origin JSON file so the static
 // GitHub Pages app does not need to call NEPSE's protected cross-origin API.
-// A failed sync leaves planning available, but published-holiday checks may
-// be incomplete for session-dependent logs and streaks.
+// A failed sync leaves existing positions/orders usable, but blocks new
+// entries because there is no reliable holiday source to validate a session.
 async function loadPublishedHolidayCalendar() {
   const status = elements.sessionCalendarStatus;
   if (status) status.textContent = 'Loading the published NEPSE holiday calendar…';
@@ -1012,7 +998,7 @@ async function loadPublishedHolidayCalendar() {
     automaticHolidayDates = new Set();
     holidayCalendarAvailable = false;
     if (status) {
-      status.textContent = 'Automatic holiday sync is unavailable; published-holiday checks may be incomplete.';
+      status.textContent = 'Automatic holiday sync is unavailable; new day-orders are disabled until it is available again.';
       status.style.color = 'var(--color-accent)';
     }
     console.warn('Failed to load the published NEPSE holiday calendar:', error);
@@ -1239,8 +1225,9 @@ function convertOrderToActiveTrade(order, context = {}) {
     highestClose: vwap,
     lastClose: todayClose !== null ? todayClose : vwap,
     lastAtr: todayAtr,
-    // Preserve the strategy-capital base that sized this order, even if the
-    // order took several days to fill.
+    // Use the account value that was actually used to size this order (captured
+    // when it was first placed), not today's value — the share count was fixed
+    // against that original sizing, even if this order took several days to fill.
     accountValueAtEntry: order.accountValueAtEntry != null ? order.accountValueAtEntry : state.accountValue,
     entryDate,
     entryISO, // actual first-fill date, used for catch-up date math
@@ -1377,10 +1364,9 @@ function setupEventListeners() {
   });
   elements.screenerBulkParseBtn.addEventListener('click', bulkAddScreenerCandidates);
 
-  // --- Strategy Capital / Available Cash Modal ---
+  // --- Account Value Modal ---
   elements.editAccountBtn.addEventListener('click', () => {
     elements.modalAccountValue.value = state.accountValue;
-    elements.modalCashAvailable.value = getAvailableCash();
     const costs = getTransactionCosts();
     if (elements.modalBrokeragePct) elements.modalBrokeragePct.value = costs.brokeragePct;
     if (elements.modalRegulatoryFeePct) elements.modalRegulatoryFeePct.value = costs.regulatoryFeePct;
@@ -1398,31 +1384,25 @@ function setupEventListeners() {
     elements.accountModal.classList.remove('active');
   });
 
-  elements.saveAccountBtn.addEventListener('click', async () => {
-    const strategyCapital = parseFloat(elements.modalAccountValue.value);
-    const availableCash = parseFloat(elements.modalCashAvailable.value);
-    const reservedCash = getPendingReservedCash();
-    if (!isFinite(strategyCapital) || strategyCapital <= 0 || !isFinite(availableCash) || availableCash < 0) {
-      await appAlert('Enter a strategy capital greater than zero and available cash of zero or more.');
-      return;
+  elements.saveAccountBtn.addEventListener('click', () => {
+    const val = parseFloat(elements.modalAccountValue.value);
+    if (!isNaN(val) && val > 0) {
+      const accountDelta = val - state.accountValue;
+      state.accountValue = val;
+      // Keep the cash ledger aligned when the user deposits, withdraws, or
+      // corrects the account value while positions are still open.
+      adjustCashBalance(accountDelta);
+      state.transactionCosts = normalizeTransactionCosts({
+        brokeragePct: elements.modalBrokeragePct?.value,
+        regulatoryFeePct: elements.modalRegulatoryFeePct?.value,
+        dpChargePerSell: elements.modalDpCharge?.value,
+        capitalGainsTaxPct: elements.modalCapitalGainsTaxPct?.value
+      });
+      state.transactionCostsConfigured = true;
+      elements.accountModal.classList.remove('active');
+      saveState();
+      calculatePosition();
     }
-    if (availableCash + reservedCash > strategyCapital + 1e-9) {
-      await appAlert('Available cash plus pending reservations cannot exceed NEPSE strategy capital.');
-      return;
-    }
-
-    state.accountValue = strategyCapital;
-    state.cashBalance = availableCash + reservedCash;
-    state.transactionCosts = normalizeTransactionCosts({
-      brokeragePct: elements.modalBrokeragePct?.value,
-      regulatoryFeePct: elements.modalRegulatoryFeePct?.value,
-      dpChargePerSell: elements.modalDpCharge?.value,
-      capitalGainsTaxPct: elements.modalCapitalGainsTaxPct?.value
-    });
-    state.transactionCostsConfigured = true;
-    elements.accountModal.classList.remove('active');
-    saveState();
-    renderAll();
   });
 
   // --- Reset App Data ---
@@ -1470,13 +1450,22 @@ function setupEventListeners() {
   elements.calcAtr.addEventListener('input', calculatePosition);
   elements.calcLiquidity.addEventListener('input', calculatePosition);
 
-  // --- Step 4: Save Trade Plan ---
+  // --- Step 4: Place GTC Limit Order ---
   elements.executeTradeBtn.addEventListener('click', async () => {
     const ticker = elements.calcTicker.value.trim().toUpperCase();
     const entry = parseFloat(elements.calcEntry.value);
     const atr = parseFloat(elements.calcAtr.value);
 
     if (!ticker || isNaN(entry) || isNaN(atr)) return;
+
+    if (!holidayCalendarReady) {
+      await appAlert('The NEPSE holiday calendar is still loading. Please try again in a moment.');
+      return;
+    }
+    if (!holidayCalendarAvailable) {
+      await appAlert('The automatic NEPSE holiday calendar is unavailable. New day-orders remain disabled until it loads successfully.');
+      return;
+    }
 
     // Hard gate: block new entries unless the market is confirmed and healthy.
     const macroGate = getMacroGateStatus();
@@ -1487,15 +1476,20 @@ function setupEventListeners() {
           : macroGate.marketState !== 'uptrend'
             ? 'New entries are blocked until a follow-through day confirms a new market uptrend.'
             : `New entries are blocked: ${macroGate.count} distribution day(s) in the trailing window (Under Distribution).`) +
-        `\n\nExisting positions remain managed normally. Pending trade plans will stop rolling forward until the market state is confirmed and healthy.`
+        `\n\nExisting positions remain managed normally. Expired pending day orders will not be resubmitted until the market state is confirmed and healthy.`
       );
+      return;
+    }
+
+    if (!isNepseTradingDay(new Date())) {
+      await appAlert('New day-orders can only be placed on a NEPSE trading session. Check the session calendar and try again on the next open session.');
       return;
     }
 
     // Guard: portfolio slots (count both open positions AND outstanding GTC orders reserved against them)
     const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
     if (slotsCommitted >= PORTFOLIO_SLOTS) {
-      await appAlert(`All ${PORTFOLIO_SLOTS} portfolio slots are filled or reserved by pending trade plans. Close a position or remove a plan first.`);
+      await appAlert(`All ${PORTFOLIO_SLOTS} portfolio slots are filled or reserved by pending GTC orders. Close a position or cancel an order first.`);
       return;
     }
 
@@ -1503,12 +1497,11 @@ function setupEventListeners() {
     // both conditions are true, the person sees the more specific/actionable
     // "already have this ticker" message rather than a misleading cash error.
     if (state.pendingOrders.some(o => o.ticker === ticker) || state.activeTrades.some(t => t.ticker === ticker)) {
-      await appAlert(`${ticker} already has a pending trade plan or open position.`);
+      await appAlert(`${ticker} already has a pending order or open position.`);
       return;
     }
 
-    const cashAvailable = getAvailableCash();
-    const maxRiskPerPosition = getMaxRiskPerPosition();
+    const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
     const plannedStop = entry - (ATR_MULTIPLIER * atr);
     const riskPerShare = entry - plannedStop;
     const size = Math.floor(maxRiskPerPosition / riskPerShare);
@@ -1517,6 +1510,7 @@ function setupEventListeners() {
 
     // Guard: available cash (risk-based sizing has no built-in cap on capital deployed,
     // only on total risk — so check we actually have the cash for this position).
+    const cashAvailable = getAvailableCash();
     const requiredCapital = buyNetCost(size * entry);
     if (requiredCapital > cashAvailable) {
       const affordableSize = Math.floor(cashAvailable / (entry * (1 + (getTransactionCosts().brokeragePct + getTransactionCosts().regulatoryFeePct) / 100)));
@@ -1531,7 +1525,7 @@ function setupEventListeners() {
       return;
     }
 
-    // Step 4: save the local trade plan (broker execution happens separately)
+    // Step 4: place the GTC limit order (does not fill immediately)
     const entryReason = elements.calcReason.value.trim();
     state.pendingOrders.push({
       ticker,
@@ -1551,7 +1545,7 @@ function setupEventListeners() {
       fillLog: [],
       lastLoggedDate: '',
       lastLoggedISO: null,
-      accountValueAtEntry: state.accountValue, // strategy capital used to size this order
+      accountValueAtEntry: state.accountValue,  // account value used to size this order originally
       entryReason              // why the trade was taken — optional, carried through to the active trade and history
     });
 
@@ -1565,7 +1559,7 @@ function setupEventListeners() {
     saveState();
     queueMotionTransfer(elements.executeTradeBtn, () => findTradeCard(ticker, 'pending'));
 
-    await appAlert(`Trade plan saved: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. This app does not place orders — submit the day order through your broker's TMS during an open NEPSE session. Then log each session's close, ATR, and fills here to calculate the next plan (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts).`);
+    await appAlert(`Day Order placed: BUY ${size} ${ticker} @ Rs. ${entry.toFixed(2)}, stop Rs. ${plannedStop.toFixed(2)}. It cancels at session end each day — log the close & ATR daily to re-price and resubmit (up to ${MAX_DAY_ORDER_ATTEMPTS} attempts, or until the close breaks the current stop or the market filter closes).`);
   });
 
   // --- Pending Orders: log a trading day, cancel, or mark filled ---
@@ -1581,11 +1575,11 @@ function setupEventListeners() {
       const hasFill = order.filledShares > 0;
 
       const confirmMsg = hasFill
-        ? `${order.filledShares} of ${order.shares} share(s) have already been filled.\n\n` +
-          `Removing this plan will KEEP the ${order.filledShares} filled share(s) as an active trade (at their VWAP of ` +
-          `Rs. ${(order.filledValue / order.filledShares).toFixed(2)}) and remove only the unfilled remainder ` +
-          `(${order.shares - order.filledShares}) from this tracker. It will not cancel a live order in your broker's TMS. Continue?`
-        : `Remove the saved trade plan for ${order.ticker}? This will not cancel a live order in your broker's TMS.`;
+        ? `${order.filledShares} of ${order.shares} share(s) have already been filled on this order.\n\n` +
+          `Cancelling will KEEP the ${order.filledShares} filled share(s) as an active trade (at their VWAP of ` +
+          `Rs. ${(order.filledValue / order.filledShares).toFixed(2)}) and drop only the unfilled remainder ` +
+          `(${order.shares - order.filledShares}). Continue?`
+        : `Cancel the pending order for ${order.ticker}?`;
 
       if (await appConfirm(confirmMsg)) {
         // Re-resolve by ticker rather than trusting the idx captured before the
@@ -1599,7 +1593,7 @@ function setupEventListeners() {
         saveState();
         renderAll();
         if (hasFill) {
-          await appAlert(`${currentOrder.ticker}: ${currentOrder.filledShares} filled share(s) moved to Active Trades. The unfilled remainder was removed from this tracker; cancel any live TMS order yourself.`);
+          await appAlert(`${currentOrder.ticker}: ${currentOrder.filledShares} filled share(s) moved to Active Trades. Unfilled remainder cancelled.`);
         }
       }
       return;
@@ -1725,9 +1719,9 @@ function setupEventListeners() {
         await appAlert(
           `${order.ticker}: close (Rs. ${todayClose.toFixed(2)}) fell below today's stop (Rs. ${order.plannedStop.toFixed(2)}).\n\n` +
           (hadFill
-            ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder (${order.shares - order.filledShares}) was removed from this tracker; cancel any live TMS order yourself.` +
+            ? `${order.filledShares} share(s) already filled were converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder (${order.shares - order.filledShares}) is cancelled.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
-            : `No shares had been filled, so the plan was closed. Cancel any live TMS order yourself.`)
+            : `No shares had been filled — order cancelled per strategy rules.`)
         );
         return;
       }
@@ -1745,11 +1739,11 @@ function setupEventListeners() {
         clearPendingOrderInputs(row);
         saveState();
         await appAlert(
-          `${order.ticker}: the market filter is no longer confirmed, so no trade plan was prepared for tomorrow.\n\n` +
+          `${order.ticker}: the market filter is no longer confirmed, so tomorrow's day order was not submitted.\n\n` +
           (hadFill
-            ? `${order.filledShares} filled share(s) were moved to Active Trades; the unfilled remainder was removed from this tracker. Cancel any live TMS order yourself.` +
+            ? `${order.filledShares} filled share(s) were moved to Active Trades; the unfilled remainder was cancelled.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
-            : 'Nothing was filled, so the plan was closed. Cancel any live TMS order yourself.')
+            : 'Nothing was filled, so the pending order was cancelled.')
         );
         return;
       }
@@ -1770,22 +1764,21 @@ function setupEventListeners() {
         await appAlert(
           `${order.ticker}: order window closed after ${MAX_DAY_ORDER_ATTEMPTS} trading days.\n\n` +
           (hadFill
-            ? `${order.filledShares} of ${order.shares} planned shares were filled and converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder was removed from this tracker; cancel any live TMS order yourself.` +
+            ? `${order.filledShares} of ${order.shares} planned shares were filled and converted into an active trade at their VWAP using today's ATR and close. The unfilled remainder is cancelled.` +
               (newTrade && newTrade.lastClose < newTrade.trailingStop ? ' EXIT SIGNAL is active for the filled position.' : '')
-            : `Nothing was filled, so the plan was closed. Cancel any live TMS order yourself.`)
+            : `Nothing was filled — order cancelled per strategy rules.`)
         );
         return;
       }
 
-      // Step 4: no breach, still within the window — calculate tomorrow's day-order plan.
+      // Step 4: no breach, still within the window — roll forward to tomorrow's day-order.
       // New price = today's close. New stop = new price − 2.5×today's ATR. Risk-per-share is
       // always 2.5×ATR by construction, so the target share count only depends on ATR, not price —
-      // it's recomputed fresh each day so the 1%-of-strategy-capital risk target stays accurate no matter
+      // it's recomputed fresh each day so the 1%-of-account risk promise stays accurate no matter
       // how many days this takes to fill.
-      const cashAvailableForThisOrder = getAvailableCash(order);
-      const maxRiskPerPosition = getMaxRiskPerPosition();
-      const newStop = getRepricedPendingStop(order, todayClose, todayAtr);
-      const newRiskPerShare = ATR_MULTIPLIER * todayAtr;
+      const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
+      const newStop = todayClose - (ATR_MULTIPLIER * todayAtr);
+      const newRiskPerShare = todayClose - newStop; // == ATR_MULTIPLIER * todayAtr
       let newTargetShares = Math.floor(maxRiskPerPosition / newRiskPerShare);
 
       // Cash guard: a re-price can raise the target size (e.g. ATR shrank), but nothing
@@ -1795,6 +1788,7 @@ function setupEventListeners() {
       // Filled shares have already reduced cashBalance.  Exclude this order's
       // old unfilled reservation while sizing its replacement, but retain all
       // other pending orders' reservations.
+      const cashAvailableForThisOrder = getAvailableCash(order);
       const buyCostPerShare = buyNetCost(todayClose);
       const affordableNewShares = order.filledShares + Math.floor(cashAvailableForThisOrder / buyCostPerShare);
       let cappedByCash = false;
@@ -1817,8 +1811,8 @@ function setupEventListeners() {
         saveState();
         await appAlert(
           cappedByCash
-            ? `${order.ticker}: no cash is available to size this plan, so it was closed.`
-            : `${order.ticker}: today's ATR is too large to size any shares within the 1% risk budget, so the plan was closed.`
+            ? `${order.ticker}: no cash available to size any shares for this order. Order cancelled.`
+            : `${order.ticker}: today's ATR is too large to size any shares within the 1% risk budget. Order cancelled.`
         );
         return;
       }
@@ -1833,7 +1827,7 @@ function setupEventListeners() {
         clearPendingOrderInputs(row);
         saveState();
         await appAlert(
-          `${order.ticker}: today's re-priced risk math only supports ${newTargetShares} share(s), below the ${MIN_LOT_SIZE}-share practical minimum, so the plan was closed.`
+          `${order.ticker}: today's re-priced risk math only supports ${newTargetShares} share(s), below the ${MIN_LOT_SIZE}-share practical minimum. Order cancelled.`
         );
         return;
       }
@@ -1854,12 +1848,15 @@ function setupEventListeners() {
       }
 
       order.shares = Math.max(newTargetShares, order.filledShares);
-      // Keep the risk-tracking basis in sync with what sized the order today.
+      // Keep the risk-tracking basis in sync with what actually sized the order today —
+      // otherwise "Actual Risk %" shown later on the active trade / history would be
+      // computed against a stale account value from the original placement day, even
+      // though the share count above was just resized against TODAY's account value.
       order.accountValueAtEntry = state.accountValue;
       clearPendingOrderInputs(row);
       saveState();
       await appAlert(
-        `${order.ticker}: plan ready for tomorrow — place through your broker's TMS: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
+        `${order.ticker}: rolled forward for tomorrow — new order: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
         `stop Rs. ${newStop.toFixed(2)} (${MAX_DAY_ORDER_ATTEMPTS - order.daysWaiting} day(s) left in the window).` +
         (cappedByCash
           ? `\n\nNote: today's risk math targeted a larger size, but available cash capped it at ${order.shares} share(s) to avoid over-committing capital.`
@@ -2010,8 +2007,7 @@ function calculatePosition() {
     return;
   }
 
-  const cashAvailable = getAvailableCash();
-  const maxRiskPerPosition = getMaxRiskPerPosition();
+  const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
   const plannedStop = entry - (ATR_MULTIPLIER * atr);
   const riskPerShare = entry - plannedStop;
 
@@ -2043,6 +2039,7 @@ function calculatePosition() {
     elements.resPositionSize.style.color = belowMinLot ? 'var(--color-danger)' : '';
 
     // Capital availability check (risk-based sizing has no built-in cap on capital deployed)
+    const cashAvailable = getAvailableCash();
     const requiredCapital = positionSize * entry;
     const cashOk = requiredCapital <= cashAvailable;
 
@@ -2051,9 +2048,9 @@ function calculatePosition() {
 
     // Capital concentration check — advisory only. A fixed 1% risk allocation does NOT
     // imply a fixed capital allocation: low-ATR, high-price stocks can consume a large
-    // share of deployable cash for the same 1% risk. Flag it so it's a conscious choice
+    // share of account capital for the same 1% risk. Flag it so it's a conscious choice
     // rather than something only discovered when the cash guard blocks a later trade.
-    const capitalPct = (requiredCapital / cashAvailable) * 100;
+    const capitalPct = (requiredCapital / state.accountValue) * 100;
     let capitalPctColor = 'var(--color-primary)'; // green
     let capitalPctLabel = '';
     if (capitalPct > 40) {
@@ -2093,9 +2090,11 @@ function calculatePosition() {
       elements.liquidityCheckTile.style.display = 'none';
     }
 
-    // Saving a plan is available on any day; session checks apply when market
-    // activity is logged, not while planning.
-    elements.executeTradeBtn.disabled = !macroOk || !slotsAvailable || !cashOk || belowMinLot;
+    // Only enable placing the GTC order if macro filter passes AND slots are available AND
+    // cash is sufficient AND the position clears the practical minimum lot size.
+    // Wait for the automatic holiday calendar to settle so a page-load race
+    // cannot allow an order on a published NEPSE holiday.
+    elements.executeTradeBtn.disabled = !holidayCalendarReady || !holidayCalendarAvailable || !macroOk || !slotsAvailable || !cashOk || belowMinLot;
   } else {
     setMotionText(elements.resPositionSize, '0 Shares (Risk per share too high)');
     elements.resPositionSize.style.color = '';
@@ -2424,8 +2423,8 @@ function renderScreenerTable() {
 // day — DISTRIBUTION_FTD_MIN_PCT or more — on volume higher than the prior
 // bar) resets the window: only bars from the FTD onward are considered.
 // This is a hard gate on NEW entries once severe ("Under Distribution"):
-// Saving a trade plan is blocked until a new FTD confirms the market. Pending
-// plans stop rolling forward; active positions remain unaffected.
+// Place Day Order is blocked until a new FTD confirms the market. Expired
+// pending day orders are not resubmitted; active positions remain unaffected.
 // --------------------------------------------------------------------------
 const DISTRIBUTION_WINDOW_DAYS = 25;          // sessions after which a distribution day expires
 const DISTRIBUTION_MIN_DECLINE_PCT = 0.2;
@@ -2439,8 +2438,8 @@ const MIN_INDEX_HISTORY_BARS = 120;             // roughly 6 months of NEPSE ses
 // Hard gate: once the trailing distribution-day count hits the severe
 // threshold ("Under Distribution"), new capital commitments are blocked
 // outright until a new FTD confirms the market. "Caution" (3-4) stays
-// advisory only. Pending plans stop rolling forward; active positions keep
-// trailing/exiting normally.
+// advisory only. Expired pending orders are not resubmitted; active positions
+// keep trailing/exiting normally.
 function getMacroGateStatus() {
   const { count, level, state: marketState } = computeDistributionDays(state.indexBars);
   const insufficientHistory = !Array.isArray(state.indexBars) || state.indexBars.length < MIN_INDEX_HISTORY_BARS;
@@ -2673,8 +2672,7 @@ function renderDistributionPanel() {
 }
 
 function renderHeader() {
-  setMotionText(elements.headerAccountValue, formatNPR(getAvailableCash()));
-  setMotionText(elements.headerStrategyCapital, formatNPR(state.accountValue));
+  setMotionText(elements.headerAccountValue, formatNPR(state.accountValue));
 
   // Slots badge (open positions + reserved GTC orders)
   const used = state.activeTrades.length + state.pendingOrders.length;
@@ -2718,7 +2716,7 @@ function renderPendingOrders() {
     elements.pendingOrdersList.innerHTML = `
       <div class="empty-state">
         <i class="fa-solid fa-clock"></i>
-        <p>No saved trade plans. Use the calculator to create one.</p>
+        <p>No outstanding orders. Use the calculator to place one.</p>
       </div>
     `;
     return;
@@ -2748,7 +2746,7 @@ function renderPendingOrders() {
 
       <div class="trade-card-grid">
         <div>
-          <span class="card-grid-lbl">Planned Order Price</span>
+          <span class="card-grid-lbl">Today's Order Price</span>
           <span class="card-grid-val">Rs. ${formatNPR(order.plannedEntry)}</span>
         </div>
         <div>
@@ -2756,7 +2754,7 @@ function renderPendingOrders() {
           <span class="card-grid-val" style="color: var(--color-accent);">Rs. ${formatNPR(order.plannedStop)}</span>
         </div>
         <div>
-          <span class="card-grid-lbl">Plan Saved On</span>
+          <span class="card-grid-lbl">First Placed On</span>
           <span class="card-grid-val">${escapeHTML(order.placedDate)}</span>
         </div>
       </div>
@@ -2767,7 +2765,7 @@ function renderPendingOrders() {
       </p>` : ''}
 
       <p style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.5rem 0 0;">
-        This tracker does not submit orders. Place the day order in your TMS, then log today's close, ATR, and fills below to calculate the next session's plan.
+        Day order — cancels at session end. Log today's close &amp; ATR below to re-price and resubmit for tomorrow while the market remains confirmed.
       </p>
 
       ${loggedToday ? `<p class="text-muted" style="font-size: 0.72rem; margin: 0.45rem 0 0;">Logged for ${escapeHTML(order.lastLoggedDate || displayDateFromISO(todayISODateString()))}; it can be logged again on the next trading session.</p>` : ''}
@@ -2822,7 +2820,7 @@ function renderPendingOrders() {
           <i class="fa-solid fa-calendar-check"></i> ${loggedToday ? 'Logged Today' : 'Log Today &amp; Re-Price'}
         </button>
         <button class="btn btn-secondary btn-danger-action cancel-order-btn" style="padding: 0.4rem 0.8rem; font-size: 0.75rem;" data-index="${idx}">
-          <i class="fa-solid fa-xmark"></i> Remove Plan
+          <i class="fa-solid fa-xmark"></i> Cancel
         </button>
       </div>
     `;
@@ -2870,7 +2868,7 @@ function renderActiveTrades() {
     // Step 7: exit if last close is below trailing stop
     const isExitRequired = (trade.lastClose || trade.actualPrice) < trade.trailingStop;
 
-    // Actual modeled risk % relative to NEPSE strategy capital at entry
+    // Actual risk % relative to account value at entry
     const entryAccountValue = trade.accountValueAtEntry || state.accountValue;
     const actualRiskNpr = (ATR_MULTIPLIER * trade.initialAtr) * trade.shares;
     const actualRiskPct = (actualRiskNpr / entryAccountValue) * 100;
@@ -2890,7 +2888,7 @@ function renderActiveTrades() {
           <span class="shares-badge">${trade.shares} Shares</span>
           ${trade.soldShares > 0 ? `<span class="risk-badge-mini" title="Already exited via partial sells"><i class="fa-solid fa-layer-group"></i> ${trade.soldShares} sold so far</span>` : ''}
           ${trade.transactionCostsApplied ? '' : '<span class="risk-badge-mini" title="Imported before transaction-cost tracking"><i class="fa-solid fa-tag"></i> Legacy gross</span>'}
-          <span class="risk-badge-mini" title="Actual modeled risk % of NEPSE strategy capital at entry">
+          <span class="risk-badge-mini" title="Actual Risk % of account value at entry">
             <i class="fa-solid fa-shield-halved"></i> Risk: ${actualRiskPct.toFixed(2)}%
           </span>
         </div>
