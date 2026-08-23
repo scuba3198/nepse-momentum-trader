@@ -149,20 +149,20 @@ let pendingOrderRepriceCheck;
   });
   const migrated = repriceApi.normalizePersistedState({
     accountValue: 1000,
-    cashBalance: 1000,
+    cashBalance: 400,
     transactionCosts: { brokeragePct: 1, regulatoryFeePct: 0.5 },
-    pendingOrders: [{ ticker: 'REPRICE', plannedEntry: 100, atr: 1, plannedStop: 7.5,
+    pendingOrders: [{ ticker: 'REPRICE', plannedEntry: 12, atr: 0.4, plannedStop: 11,
       shares: 10, filledShares: 0, filledValue: 0, filledCost: 0 }],
     activeTrades: [],
     history: []
   });
   migrated.state.indexBars = confirmedMarketBars();
-  assert.ok(Math.abs(migrated.state.pendingOrders[0].legacyReservedCash - 1015) < 1e-9);
+  assert.ok(Math.abs(migrated.state.pendingOrders[0].legacyReservedCash - 121.8) < 1e-9);
   repriceApi.setState(migrated.state);
 
   const fields = {
     '.pending-close-input': { value: '11' },
-    '.pending-atr-input': { value: '0.1' },
+    '.pending-atr-input': { value: '0.25' },
     '.pending-fill-shares-input': { value: '' },
     '.pending-fill-price-input': { value: '' }
   };
@@ -176,9 +176,30 @@ let pendingOrderRepriceCheck;
     const order = repriceApi.getState().pendingOrders[0];
     assert.equal(order.legacyReservedCash, null);
     assert.equal(order.plannedEntry, 11);
-    assert.equal(order.shares, 40);
+    assert.equal(order.plannedStop, 11);
+    assert.equal(order.shares, 36);
     assert.equal(repriceApi.getAvailableCash(), repriceApi.getState().cashBalance -
       (order.shares - order.filledShares) * order.plannedEntry);
+    assert.equal(repriceApi.getAvailableCash(), 4);
+    assert.ok(repriceApi.getDialogMessages().some(message => message.includes('stop Rs. 11.00')));
+
+    const positive = repriceApi.normalizePersistedState({
+      accountValue: 1000,
+      cashBalance: 1000,
+      pendingOrders: [{ ticker: 'POSITIVE', plannedEntry: 12, atr: 0.5, plannedStop: 10.75,
+        shares: 8, filledShares: 0, filledValue: 0, filledCost: 0 }],
+      activeTrades: [],
+      history: []
+    });
+    positive.state.indexBars = confirmedMarketBars();
+    repriceApi.setState(positive.state);
+    return repriceApi.clickPending(target).then(() => {
+      const positiveOrder = repriceApi.getState().pendingOrders[0];
+      assert.equal(positiveOrder.plannedStop, 10.75);
+      assert.equal(positiveOrder.shares, 40);
+      assert.equal(repriceApi.getAvailableCash(), 560);
+      assert.ok(repriceApi.getDialogMessages().some(message => message.includes('stop Rs. 10.75')));
+    });
   });
 }
 

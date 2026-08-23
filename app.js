@@ -1701,14 +1701,12 @@ function setupEventListeners() {
       }
 
       // Step 4: no breach, still within the window — roll forward to tomorrow's day-order.
-      // New price = today's close. New stop = new price − 2.5×today's ATR. Risk-per-share is
-      // always 2.5×ATR by construction, so the target share count only depends on ATR, not price —
-      // it's recomputed fresh each day so the 1%-of-account risk promise stays accurate no matter
-      // how many days this takes to fill.
+      // New price = today's close. Ratchet the stop upward, then size from the
+      // actual retained-stop risk so the target stays coherent across reprices.
       const maxRiskPerPosition = state.accountValue * RISK_PER_POSITION_PCT;
-      const newStop = todayClose - (ATR_MULTIPLIER * todayAtr);
-      const newRiskPerShare = todayClose - newStop; // == ATR_MULTIPLIER * todayAtr
-      let newTargetShares = Math.floor(maxRiskPerPosition / newRiskPerShare);
+      const candidateStop = todayClose - (ATR_MULTIPLIER * todayAtr);
+      const nextStop = Math.max(order.plannedStop, candidateStop);
+      const newRiskPerShare = todayClose - nextStop;
 
       // Cash guard: a re-price can raise the target size (e.g. ATR shrank), but nothing
       // re-checks that cash is actually available for the larger size — so successive
@@ -1721,14 +1719,17 @@ function setupEventListeners() {
       const buyCostPerShare = todayClose;
       const affordableNewShares = order.filledShares + Math.floor(cashAvailableForThisOrder / buyCostPerShare);
       let cappedByCash = false;
-      if (newTargetShares > affordableNewShares) {
+      let newTargetShares = newRiskPerShare > 0
+        ? Math.floor(maxRiskPerPosition / newRiskPerShare)
+        : affordableNewShares;
+      if (newRiskPerShare > 0 && newTargetShares > affordableNewShares) {
         newTargetShares = Math.max(affordableNewShares, order.filledShares);
         cappedByCash = true;
       }
 
       order.plannedEntry = todayClose;
       order.atr = todayAtr;
-      order.plannedStop = newStop;
+      order.plannedStop = nextStop;
       order.legacyReservedCash = null;
 
       if (newTargetShares <= 0 && order.filledShares === 0) {
@@ -1787,7 +1788,7 @@ function setupEventListeners() {
       saveState();
       await appAlert(
         `${order.ticker}: rolled forward for tomorrow — new order: BUY ${order.shares - order.filledShares} @ Rs. ${todayClose.toFixed(2)}, ` +
-        `stop Rs. ${newStop.toFixed(2)} (${MAX_DAY_ORDER_ATTEMPTS - order.daysWaiting} day(s) left in the window).` +
+        `stop Rs. ${order.plannedStop.toFixed(2)} (${MAX_DAY_ORDER_ATTEMPTS - order.daysWaiting} day(s) left in the window).` +
         (cappedByCash
           ? `\n\nNote: today's risk math targeted a larger size, but available cash capped it at ${order.shares} share(s) to avoid over-committing capital.`
           : '')
