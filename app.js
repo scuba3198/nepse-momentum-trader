@@ -1481,11 +1481,6 @@ function setupEventListeners() {
       return;
     }
 
-    if (!isNepseTradingDay(new Date())) {
-      await appAlert('New day-orders can only be placed on a NEPSE trading session. Check the session calendar and try again on the next open session.');
-      return;
-    }
-
     // Guard: portfolio slots (count both open positions AND outstanding GTC orders reserved against them)
     const slotsCommitted = state.activeTrades.length + state.pendingOrders.length;
     if (slotsCommitted >= PORTFOLIO_SLOTS) {

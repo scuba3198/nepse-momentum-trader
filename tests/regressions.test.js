@@ -2,25 +2,57 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function loadApp() {
+function loadApp(options = {}) {
   const noop = () => {};
   let reducedMotion = false;
   const storage = new Map();
-  const element = () => ({
-    addEventListener: noop,
+  const handlers = new Map();
+  const elements = new Map();
+  const dialogMessages = [];
+  const makeElement = id => {
+    let textContent = '';
+    const node = {
+    addEventListener: (name, handler) => {
+      const key = `${id}:${name}`;
+      if (!handlers.has(key)) handlers.set(key, []);
+      handlers.get(key).push(handler);
+      if (options.autoResolveDialogs && id === 'app-dialog-ok-btn' && name === 'click') {
+        Promise.resolve().then(handler);
+      }
+    },
     removeEventListener: noop,
     querySelector: () => null,
     querySelectorAll: () => [],
     classList: { add: noop, remove: noop },
+    dataset: {},
     style: {},
     setAttribute: noop,
     appendChild: noop,
     focus: noop,
     select: noop,
+    dispatchEvent: noop,
+    getBoundingClientRect: () => null,
     value: '',
-    textContent: '',
     innerHTML: ''
-  });
+    };
+    Object.defineProperty(node, 'textContent', {
+      get: () => textContent,
+      set: value => {
+        textContent = String(value);
+        if (id === 'app-dialog-message') dialogMessages.push(textContent);
+      }
+    });
+    return node;
+  };
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, makeElement(id));
+    return elements.get(id);
+  };
+  const fixedDate = options.fixedDate ? new Date(options.fixedDate) : null;
+  const AppDate = fixedDate ? class extends Date {
+    constructor(...args) { super(...(args.length ? args : [fixedDate.getTime()])); }
+    static now() { return fixedDate.getTime(); }
+  } : Date;
   const context = {
     console,
     document: { getElementById: element, addEventListener: noop, removeEventListener: noop, createElement: element },
@@ -35,11 +67,17 @@ function loadApp() {
       setItem: (key, value) => storage.set(key, String(value)),
       removeItem: key => storage.delete(key)
     },
-    Blob, URL, Intl, Date, Set, Map, Math, JSON, isFinite, parseFloat, parseInt,
+    Blob, URL, Intl, Date: AppDate, Set, Map, Math, JSON, isFinite, parseFloat, parseInt,
     Promise, Array, Object, Number, String, RegExp, Error
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync('app.js', 'utf8'), context);
+  context.__testElements = elements;
+  context.__testHandlers = handlers;
+  context.__testDialogMessages = dialogMessages;
+  if (options.setupEventListeners) {
+    vm.runInContext('holidayCalendarReady = true; holidayCalendarAvailable = true; setupEventListeners();', context);
+  }
   vm.runInContext(`this.api = {
     applyDailyUpdate, recomputeTradeFromUpdateLog, normalizePersistedState,
     buyNetCost, sellNetProceeds, validatePendingFillCash, convertOrderToActiveTrade,
@@ -47,7 +85,10 @@ function loadApp() {
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
     setReducedMotion: value => window.setReducedMotion(value),
-    setState: value => { state = value; }, getState: () => state
+    setState: value => { state = value; }, getState: () => state,
+    setElementValue: (id, value) => { __testElements.get(id).value = value; },
+    clickExecute: () => __testHandlers.get('execute-trade-btn:click')[0](),
+    getDialogMessages: () => __testDialogMessages.slice()
   };`, context);
   return context.api;
 }
@@ -67,6 +108,34 @@ function confirmedMarketBars(count = 120) {
     bars.push({ date: String(bars.length), close: bars.at(-1).close + 0.1, volume: 200 });
   }
   return bars;
+}
+
+// Day-order placement remains available on a weekend when the published
+// calendar loaded successfully; the later per-session logging guard is separate.
+let weekendOrderCheck;
+{
+  const orderApi = loadApp({
+    fixedDate: '2026-08-23T12:00:00+05:45', // Sunday
+    setupEventListeners: true,
+    autoResolveDialogs: true
+  });
+  orderApi.setState({
+    ...orderApi.getState(),
+    accountValue: 1000000,
+    cashBalance: 1000000,
+    transactionCosts: { brokeragePct: 0, regulatoryFeePct: 0, dpChargePerSell: 0, capitalGainsTaxPct: 0 },
+    indexBars: confirmedMarketBars(),
+    activeTrades: [],
+    pendingOrders: []
+  });
+  orderApi.setElementValue('calc-ticker', 'WEEKEND');
+  orderApi.setElementValue('calc-entry', '100');
+  orderApi.setElementValue('calc-atr', '2');
+  weekendOrderCheck = orderApi.clickExecute().then(() => {
+    assert.equal(orderApi.getState().pendingOrders.length, 1);
+    assert.equal(orderApi.getState().pendingOrders[0].ticker, 'WEEKEND');
+    assert.equal(orderApi.getDialogMessages().some(message => message.includes('only be placed on a NEPSE trading session')), false);
+  });
 }
 
 // The market gate requires the advertised six months of history, and tiny
@@ -260,4 +329,9 @@ function confirmedMarketBars(count = 120) {
   assert.equal(summary.pnl, -10);
 }
 
-console.log('Regression checks passed.');
+weekendOrderCheck
+  .then(() => console.log('Regression checks passed.'))
+  .catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+  });
