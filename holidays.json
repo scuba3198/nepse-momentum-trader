@@ -1,6 +1,6 @@
 {
   "source": "https://www.nepalstock.com.np/holiday-listing",
-  "syncedAt": "2026-08-06T03:34:42.616Z",
+  "syncedAt": "2026-09-03T04:21:05.607Z",
   "holidays": [
     {
       "date": "2007-03-27",
@@ -9801,6 +9801,110 @@
     {
       "date": "2026-09-04",
       "description": "Shree Krishna Janmasthami"
+    },
+    {
+      "date": "2026-09-25",
+      "description": "Indra Jatra"
+    },
+    {
+      "date": "2026-10-11",
+      "description": "Ghatasthapana"
+    },
+    {
+      "date": "2026-10-17",
+      "description": "Fulpati"
+    },
+    {
+      "date": "2026-10-18",
+      "description": "MahaAstami"
+    },
+    {
+      "date": "2026-10-19",
+      "description": "Astami"
+    },
+    {
+      "date": "2026-10-20",
+      "description": "MahaNawami"
+    },
+    {
+      "date": "2026-10-21",
+      "description": "Bijaya Dashami"
+    },
+    {
+      "date": "2026-10-22",
+      "description": "Dashain bida"
+    },
+    {
+      "date": "2026-10-23",
+      "description": "Dashain bida"
+    },
+    {
+      "date": "2026-11-08",
+      "description": "Tihar Bida"
+    },
+    {
+      "date": "2026-11-09",
+      "description": "Tihar Bida"
+    },
+    {
+      "date": "2026-11-10",
+      "description": "Tihar Bida"
+    },
+    {
+      "date": "2026-11-11",
+      "description": "Tihar Bida"
+    },
+    {
+      "date": "2026-11-12",
+      "description": "Tihar Bida"
+    },
+    {
+      "date": "2026-11-15",
+      "description": "Chhath Parva"
+    },
+    {
+      "date": "2026-12-24",
+      "description": "Udhauli Parva and Yomari Punhi"
+    },
+    {
+      "date": "2026-12-25",
+      "description": "Christmas Day"
+    },
+    {
+      "date": "2026-12-30",
+      "description": "Tamu Lhosar"
+    },
+    {
+      "date": "2027-01-11",
+      "description": "Prithvi Jayanti"
+    },
+    {
+      "date": "2027-01-15",
+      "description": "Maghe Sankranti"
+    },
+    {
+      "date": "2027-02-07",
+      "description": "Sonam Lhosar"
+    },
+    {
+      "date": "2027-02-19",
+      "description": "Prajatantra Diwas"
+    },
+    {
+      "date": "2027-03-08",
+      "description": "International Woman Day"
+    },
+    {
+      "date": "2027-03-09",
+      "description": "Gyalpo Lhosar"
+    },
+    {
+      "date": "2027-03-21",
+      "description": "Fagu Purnima"
+    },
+    {
+      "date": "2027-04-06",
+      "description": "Ghode Jatra"
     }
   ]
 }
