@@ -1,6 +1,6 @@
 {
   "source": "https://www.nepalstock.com.np/holiday-listing",
-  "syncedAt": "2026-09-04T04:29:41.733Z",
+  "syncedAt": "2026-09-22T04:52:28.775Z",
   "holidays": [
     {
       "date": "2007-03-27",
@@ -9805,6 +9805,10 @@
     {
       "date": "2026-09-08",
       "description": "Gen Z Sahid Diwas"
+    },
+    {
+      "date": "2026-09-21",
+      "description": "Emergengy Market Close"
     },
     {
       "date": "2026-09-25",
