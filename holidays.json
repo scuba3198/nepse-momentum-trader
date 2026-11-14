@@ -1,6 +1,6 @@
 {
   "source": "https://www.nepalstock.com.np/holiday-listing",
-  "syncedAt": "2026-09-22T04:52:28.775Z",
+  "syncedAt": "2026-11-14T06:17:39.256Z",
   "holidays": [
     {
       "date": "2007-03-27",
@@ -9868,6 +9868,10 @@
     },
     {
       "date": "2026-11-15",
+      "description": "Chhath Parva"
+    },
+    {
+      "date": "2026-11-16",
       "description": "Chhath Parva"
     },
     {
