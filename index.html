@@ -14,7 +14,8 @@
   <link rel="stylesheet" href="index.css">
   <script>
     (function () {
-      var saved = localStorage.getItem('atr-desk-theme');
+      var saved = null;
+      try { saved = localStorage.getItem('atr-desk-theme'); } catch (error) { /* storage blocked: fall back to the OS preference */ }
       var theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       document.documentElement.setAttribute('data-theme', theme);
     })();
@@ -474,7 +475,7 @@
       btn.addEventListener('click', function () {
         var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', next);
-        localStorage.setItem('atr-desk-theme', next);
+        try { localStorage.setItem('atr-desk-theme', next); } catch (error) { /* storage blocked: the toggle still applies for this visit */ }
         sync();
       });
     })();

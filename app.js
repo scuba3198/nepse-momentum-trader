@@ -328,9 +328,19 @@ function showDialogNow({ title, message, mode, defaultValue = '' }) {
     };
 
     const onKeydown = (e) => {
-      // Ignore Enter while typing in the prompt input if the browser would
-      // otherwise submit some ancestor form — we handle it explicitly instead.
-      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      if (e.key === 'Enter') {
+        if (e.isComposing) return; // Enter is committing IME text, not answering
+        // Handled explicitly so the browser can neither submit an ancestor
+        // form nor activate whichever button has focus.
+        e.preventDefault();
+        // A held key auto-repeats: without this, the Enter that answered one
+        // dialog also answers the next (e.g. both reset confirmations).
+        if (e.repeat) return;
+        // Enter on the focused Cancel/No button means cancel, not confirm.
+        if (e.target === dialogEls.cancelBtn) onCancel();
+        else onOk();
+        return;
+      }
       if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
     };
 
@@ -425,6 +435,18 @@ function recordRealizedPnl(pnl) {
 function sanitizeNumber(value, fallback) {
   const n = parseFloat(value);
   return isFinite(n) ? n : fallback;
+}
+
+// Strict parser for quantities and prices typed into a free-text prompt.
+// parseFloat/parseInt stop at the first unexpected character, so "1,250"
+// became 1 and "12abc" became 12 — and a sale or fill logged from that is
+// written straight into the cash ledger. Anything that is not a plain
+// non-negative decimal is rejected (NaN) so the caller re-prompts instead.
+function parseStrictNumber(value) {
+  if (typeof value === 'number') return isFinite(value) && value >= 0 ? value : NaN;
+  if (typeof value !== 'string') return NaN;
+  const trimmed = value.trim();
+  return /^\d+(\.\d+)?$/.test(trimmed) ? Number(trimmed) : NaN;
 }
 
 function formatNPR(value) {
@@ -615,6 +637,7 @@ function normalizeActiveTrade(rawTrade, accountValue) {
   const entryGrossValueRaw = parseFloat(rawTrade.entryGrossValue);
   const entrySharesRaw = parseFloat(rawTrade.entryShares);
   const replayStopFloorRaw = parseFloat(rawTrade.replayStopFloor);
+  const replayHighFloorRaw = parseFloat(rawTrade.replayHighFloor);
   const normalizedInitialStop = isFinite(initialStopRaw) ? initialStopRaw : initialStopFallback;
 
   const entry = normalizeDateFields(rawTrade.entryISO, rawTrade.entryDate);
@@ -636,6 +659,11 @@ function normalizeActiveTrade(rawTrade, accountValue) {
   const replayableHistoryFloor = updateLog.length > 0
     ? normalizedInitialStop
     : Math.max(normalizedInitialStop, isFinite(trailingStopRaw) ? trailingStopRaw : normalizedInitialStop);
+  // Same idea for the highest close: with no dated log to replay, the
+  // persisted high is the only record of it and must seed the replay.
+  const replayableHighFloor = updateLog.length === 0 && isFinite(highestCloseRaw)
+    ? Math.max(actualPrice, highestCloseRaw)
+    : actualPrice;
 
   return {
     ticker,
@@ -645,6 +673,7 @@ function normalizeActiveTrade(rawTrade, accountValue) {
     initialAtr,
     initialStop: normalizedInitialStop,
     replayStopFloor: isFinite(replayStopFloorRaw) ? replayStopFloorRaw : replayableHistoryFloor,
+    replayHighFloor: isFinite(replayHighFloorRaw) && replayHighFloorRaw > 0 ? replayHighFloorRaw : replayableHighFloor,
     trailingStop: isFinite(trailingStopRaw) ? trailingStopRaw : (isFinite(initialStopRaw) ? initialStopRaw : initialStopFallback),
     highestClose: isFinite(highestCloseRaw) ? highestCloseRaw : actualPrice,
     lastClose: isFinite(lastCloseRaw) ? lastCloseRaw : actualPrice,
@@ -792,7 +821,10 @@ function normalizePersistedState(rawState) {
   const duplicatePending = pendingOrders.length - dedupedPending.length;
   const duplicateCount = duplicateActive + duplicatePending;
   const cashRaw = parseFloat(raw.cashBalance);
-  const cashBalance = isFinite(cashRaw) && cashRaw >= 0
+  // A negative ledger is legitimate (the account value was lowered below the
+  // cash already deployed) and getAvailableCash() clamps it for sizing.
+  // Re-deriving it here made the balance change across a reload.
+  const cashBalance = isFinite(cashRaw)
     ? cashRaw
     : deriveLegacyCashBalance(accountValue, dedupedActive, dedupedPending);
 
@@ -819,6 +851,12 @@ function normalizePersistedState(rawState) {
   };
 }
 
+// Stamped with the local date: toISOString() is UTC, which is still
+// "yesterday" in Nepal (UTC+5:45) until 05:45.
+function exportFileName() {
+  return `nepse-efficient-trader-${todayISODateString()}.json`;
+}
+
 function exportState() {
   const exportData = {
     exportedAt: new Date().toISOString(),
@@ -828,10 +866,9 @@ function exportState() {
   const json = JSON.stringify(exportData, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  const today = new Date().toISOString().slice(0, 10);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `nepse-efficient-trader-${today}.json`;
+  a.download = exportFileName();
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -897,13 +934,34 @@ function importState(event) {
   reader.readAsText(file);
 }
 
+let storageWarningShown = false;
+
+// Storage can be blocked (private mode, site-data settings) or full. The
+// change must still be applied and rendered in memory; the user is told once
+// that it will not survive a reload so they can export a backup.
 function saveState() {
-  localStorage.setItem('nepse_efficient_trader_state', JSON.stringify(state));
+  try {
+    localStorage.setItem('nepse_efficient_trader_state', JSON.stringify(state));
+  } catch (error) {
+    console.error('Failed to persist state:', error);
+    if (!storageWarningShown) {
+      storageWarningShown = true;
+      appAlert(
+        'Your browser blocked saving to local storage, so changes will be lost when this page closes. Use Export to keep a backup.',
+        'Changes Not Saved'
+      );
+    }
+  }
   renderAll();
 }
 
 function loadState() {
-  const saved = localStorage.getItem('nepse_efficient_trader_state');
+  let saved = null;
+  try {
+    saved = localStorage.getItem('nepse_efficient_trader_state');
+  } catch (error) {
+    console.error('Local storage is unavailable; starting with an empty desk:', error);
+  }
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
@@ -1346,7 +1404,11 @@ function setupEventListeners() {
   elements.resetAppBtn.addEventListener('click', async () => {
     if (await appConfirm('Are you sure you want to reset all data? This will clear your portfolio, scan list, and trading history.')) {
       if (await appConfirm('Double checking: This action CANNOT be undone. Proceed with full reset?')) {
-        localStorage.removeItem('nepse_efficient_trader_state');
+        try {
+          localStorage.removeItem('nepse_efficient_trader_state');
+        } catch (error) {
+          console.error('Failed to clear persisted state:', error);
+        }
         state = {
           accountValue: DEFAULT_ACCOUNT_VALUE,
           cashBalance: DEFAULT_ACCOUNT_VALUE,
@@ -1577,11 +1639,11 @@ function setupEventListeners() {
 
       // Step 1: if anything filled in your TMS today (against TODAY's order price), record it against the running VWAP
       if (loggingAFill) {
-        const fillShares = parseInt(fillSharesRaw, 10);
-        const fillPrice = parseFloat(fillPriceRaw);
+        const fillShares = parseStrictNumber(fillSharesRaw);
+        const fillPrice = parseStrictNumber(fillPriceRaw);
 
-        if (isNaN(fillShares) || fillShares <= 0 || isNaN(fillPrice) || fillPrice <= 0) {
-          await appAlert('Enter both a valid fill quantity and fill price for today (or leave both blank if nothing filled).');
+        if (!Number.isInteger(fillShares) || fillShares <= 0 || isNaN(fillPrice) || fillPrice <= 0) {
+          await appAlert('Enter both a valid whole-number fill quantity and fill price for today (or leave both blank if nothing filled).');
           return;
         }
         if (fillShares > remaining) {
@@ -2096,7 +2158,9 @@ function isNumericScoreToken(t) {
 // words, stray text) is skipped rather than aborting the whole paste.
 function parsePastedScreenerText(text) {
   const tokens = tokenizePastedScreenerText(text);
-  const results = [];
+  // Keyed by ticker: a symbol pasted twice would otherwise fill two rows (and
+  // two of the five Top 5 slots). The later row wins, in first-seen order.
+  const byTicker = new Map();
   let skippedCount = 0;
   let i = 0;
 
@@ -2109,7 +2173,8 @@ function parsePastedScreenerText(text) {
       if (window.every(isNumericScoreToken)) {
         const nums = window.map(t => parseFloat(t.replace(/[^0-9.\-]/g, '')));
         const [, tt, vcp, , , , rs] = nums; // final, tt, vcp, eps, sales, margin, rs
-        results.push({ ticker: symbolCandidate.toUpperCase(), tt, vcp, rs });
+        const ticker = symbolCandidate.toUpperCase();
+        byTicker.set(ticker, { ticker, tt, vcp, rs });
         i += 8;
         continue;
       }
@@ -2120,7 +2185,7 @@ function parsePastedScreenerText(text) {
   }
 
   const skipped = skippedCount > 0 ? [`${skippedCount} unmatched token(s) ignored (likely headers/labels)`] : [];
-  return { results, skipped };
+  return { results: Array.from(byTicker.values()), skipped };
 }
 
 async function bulkAddScreenerCandidates() {
@@ -2402,6 +2467,13 @@ function splitCsvLine(line) {
 //    turnover in this column for the index) is used as the volume proxy.
 // Tolerant of extra whitespace and header rows; skips lines that don't
 // parse rather than throwing.
+// Mirrors normalizeIndexBars(): a bar accepted here but dropped on the next
+// load would change the distribution count (and the entry gate) on reload,
+// and a zero close divides by zero in the percent-change math.
+function isUsableIndexBar(date, close, volume) {
+  return Boolean(validISODate(date)) && isFinite(close) && close > 0 && isFinite(volume) && volume >= 0;
+}
+
 function parsePastedIndexBars(text) {
   const bars = [];
   let skippedCount = 0;
@@ -2416,7 +2488,7 @@ function parsePastedIndexBars(text) {
       const date = fields[1];
       const close = parseFloat(fields[5].replace(/[^0-9.\-]/g, ''));
       const volume = parseFloat(fields[7].replace(/[^0-9.\-]/g, ''));
-      if (!validISODate(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
+      if (!isUsableIndexBar(date, close, volume)) { skippedCount++; return; }
       bars.push({ date, close, volume });
       return;
     }
@@ -2426,7 +2498,7 @@ function parsePastedIndexBars(text) {
     const [date, closeRaw, volumeRaw] = parts;
     const close = parseFloat(closeRaw.replace(/[^0-9.\-]/g, ''));
     const volume = parseFloat(volumeRaw.replace(/[^0-9.\-]/g, ''));
-    if (!validISODate(date) || !isFinite(close) || !isFinite(volume)) { skippedCount++; return; }
+    if (!isUsableIndexBar(date, close, volume)) { skippedCount++; return; }
     bars.push({ date, close, volume });
   });
   return { bars, skippedCount };
@@ -3186,7 +3258,8 @@ function recomputeTradeFromUpdateLog(trade) {
     byDate.set(entry.dateISO, { dateISO: entry.dateISO, date: displayDateFromISO(entry.dateISO), close, atr });
   });
 
-  let highestClose = sanitizeNumber(trade.actualPrice, 0);
+  const actualPrice = sanitizeNumber(trade.actualPrice, 0);
+  let highestClose = Math.max(actualPrice, sanitizeNumber(trade.replayHighFloor, actualPrice));
   let trailingStop = Math.max(initialStop, sanitizeNumber(trade.replayStopFloor, initialStop));
   let latest = null;
   const rebuilt = [];
@@ -3284,7 +3357,7 @@ async function runCatchUpFlow() {
         'Catch Up: Missed Day'
       );
       if (closeStr === null) return; // cancelled — stop the whole catch-up
-      const close = parseFloat(closeStr);
+      const close = parseStrictNumber(closeStr);
       if (isNaN(close) || close <= 0) {
         await appAlert('Please enter a valid closing price. Catch-up stopped — run it again to resume.');
         return;
@@ -3296,7 +3369,7 @@ async function runCatchUpFlow() {
         'Catch Up: Missed Day'
       );
       if (atrStr === null) return; // cancelled
-      const atr = parseFloat(atrStr);
+      const atr = parseStrictNumber(atrStr);
       if (isNaN(atr) || atr <= 0 || atr >= close) {
         await appAlert(`ATR must be a valid number less than the close (Rs. ${close.toFixed(2)}). Catch-up stopped — run it again to resume.`);
         return;
@@ -3416,10 +3489,10 @@ async function sellPositionByTicker(ticker) {
     'Log Sell Execution'
   );
   if (sharesStr === null) return; // cancelled
-  const sharesSold = parseInt(sharesStr, 10);
+  const sharesSold = parseStrictNumber(sharesStr);
 
-  if (isNaN(sharesSold) || sharesSold <= 0) {
-    await appAlert('Please enter a valid number of shares.');
+  if (!Number.isInteger(sharesSold) || sharesSold <= 0) {
+    await appAlert('Please enter a valid whole number of shares (digits only). Nothing was sold.');
     return;
   }
   if (sharesSold > remainingShares) {
@@ -3433,10 +3506,18 @@ async function sellPositionByTicker(ticker) {
     'Log Sell Execution'
   );
   if (exitPriceStr === null) return; // cancelled
-  const exitPrice = parseFloat(exitPriceStr);
+  const exitPrice = parseStrictNumber(exitPriceStr);
 
   if (isNaN(exitPrice) || exitPrice <= 0) {
-    await appAlert('Please enter a valid sell price.');
+    await appAlert('Please enter a valid sell price (digits and a decimal point only, no commas). Nothing was sold.');
+    return;
+  }
+
+  // The prompts above were awaited: re-resolve the position rather than
+  // trusting the object captured before them.
+  trade = findActiveTradeByTicker(ticker);
+  if (!trade || sharesSold > trade.shares) {
+    await appAlert(`${ticker} changed while this sale was being entered. Nothing was sold — please try again.`);
     return;
   }
 

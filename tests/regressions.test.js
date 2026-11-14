@@ -9,6 +9,7 @@ function loadApp(options = {}) {
   const handlers = new Map();
   const elements = new Map();
   const dialogMessages = [];
+  const documentHandlers = new Map();
   const makeElement = id => {
     let textContent = '';
     const node = {
@@ -54,15 +55,27 @@ function loadApp(options = {}) {
     static now() { return fixedDate.getTime(); }
   } : Date;
   const context = {
-    console,
-    document: { getElementById: element, addEventListener: noop, removeEventListener: noop, createElement: element },
+    console: options.brokenStorage ? { ...console, error: noop } : console,
+    document: {
+      getElementById: element,
+      addEventListener: (name, handler) => {
+        if (!documentHandlers.has(name)) documentHandlers.set(name, new Set());
+        documentHandlers.get(name).add(handler);
+      },
+      removeEventListener: (name, handler) => { documentHandlers.get(name)?.delete(handler); },
+      createElement: element
+    },
     window: {
       addEventListener: noop,
       setTimeout: noop,
       matchMedia: () => ({ matches: reducedMotion }),
       setReducedMotion: value => { reducedMotion = value; }
     },
-    localStorage: {
+    localStorage: options.brokenStorage ? {
+      getItem: () => { throw new Error('storage blocked'); },
+      setItem: () => { throw new Error('storage blocked'); },
+      removeItem: () => { throw new Error('storage blocked'); }
+    } : {
       getItem: key => storage.has(key) ? storage.get(key) : null,
       setItem: (key, value) => storage.set(key, String(value)),
       removeItem: key => storage.delete(key)
@@ -75,6 +88,7 @@ function loadApp(options = {}) {
   context.__testElements = elements;
   context.__testHandlers = handlers;
   context.__testDialogMessages = dialogMessages;
+  context.__testDocumentHandlers = documentHandlers;
   if (options.setupEventListeners) {
     vm.runInContext('holidayCalendarReady = true; holidayCalendarAvailable = true; setupEventListeners();', context);
   }
@@ -84,6 +98,11 @@ function loadApp(options = {}) {
     summarizeExitAccounting, getTop5ScreenerCandidates, recordScreenerTop5Streaks, setMotionText,
     computeDistributionDays, getMacroGateStatus,
     hasSeenHeroSplash, rememberHeroSplashSeen,
+    appConfirm, parsePastedIndexBars, parsePastedScreenerText, parseStrictNumber,
+    exportFileName, loadState, saveState,
+    pressDialogKey: event => Array.from(__testDocumentHandlers.get('keydown') || [])
+      .forEach(handler => handler({ preventDefault() {}, ...event })),
+    dialogElement: id => __testElements.get(id),
     setReducedMotion: value => window.setReducedMotion(value),
     setState: value => { state = value; }, getState: () => state,
     setElementValue: (id, value) => { __testElements.get(id).value = value; },
@@ -424,7 +443,107 @@ let pendingOrderRepriceCheck;
   assert.equal(importedLegacy.pnl, -10);
 }
 
-Promise.all([weekendOrderCheck, pendingOrderRepriceCheck])
+// Enter on the focused Cancel/No button must cancel, and a held (auto-repeating)
+// Enter must not answer a dialog — otherwise it confirms a chain of prompts.
+let dialogKeyboardCheck;
+{
+  const dialogApi = loadApp();
+  const cancelBtn = dialogApi.dialogElement('app-dialog-cancel-btn');
+  const okBtn = dialogApi.dialogElement('app-dialog-ok-btn');
+  const nextTick = () => new Promise(resolve => setImmediate(resolve));
+  const onCancelFocus = dialogApi.appConfirm('Reset everything?');
+  dialogKeyboardCheck = nextTick()
+    .then(() => {
+      dialogApi.pressDialogKey({ key: 'Enter', target: cancelBtn });
+      return onCancelFocus;
+    })
+    .then(answer => {
+      assert.equal(answer, false);
+      let settled = false;
+      const held = dialogApi.appConfirm('Really reset?').then(value => { settled = true; return value; });
+      return nextTick()
+        .then(() => {
+          dialogApi.pressDialogKey({ key: 'Enter', repeat: true, target: okBtn });
+          return nextTick();
+        })
+        .then(() => {
+          assert.equal(settled, false);
+          dialogApi.pressDialogKey({ key: 'Enter', target: okBtn });
+          return held;
+        });
+    })
+    .then(answer => assert.equal(answer, true));
+}
+
+// A legacy position saved before dated update logs existed keeps its recorded
+// highest close, so the next update trails from the real high.
+{
+  const result = api.normalizePersistedState({ accountValue: 1000, pendingOrders: [], history: [], activeTrades: [{
+    ticker: 'LEGACYHIGH', actualPrice: 100, shares: 10, initialAtr: 4, initialStop: 90,
+    trailingStop: 120, highestClose: 150, lastClose: 140
+  }] });
+  const trade = result.state.activeTrades[0];
+  assert.equal(trade.highestClose, 150);
+  api.applyDailyUpdate(trade, '2026-01-05', 140, 4);
+  assert.equal(trade.highestClose, 150);
+  assert.equal(trade.trailingStop, 140);
+  const reloaded = api.normalizePersistedState(JSON.parse(JSON.stringify(
+    { accountValue: 1000, pendingOrders: [], history: [], activeTrades: [trade] }
+  ))).state.activeTrades[0];
+  assert.equal(reloaded.highestClose, 150);
+  assert.equal(reloaded.trailingStop, 140);
+}
+
+// A cash ledger pushed negative by lowering the account value survives a
+// reload instead of being silently re-derived to a different figure.
+{
+  const result = api.normalizePersistedState({ accountValue: 800000, cashBalance: -100000,
+    pendingOrders: [], history: [], activeTrades: [{ ticker: 'HELD', actualPrice: 900, shares: 1000, initialAtr: 10 }] });
+  assert.equal(result.state.cashBalance, -100000);
+  api.setState(result.state);
+  assert.equal(api.getAvailableCash(), 0);
+}
+
+// Index bars that normalization would drop on reload are rejected at paste time.
+{
+  const parsed = api.parsePastedIndexBars('2026-01-05 2100.5 1000\n2026-01-06 0 1000\n2026-01-07 -5 1000\n2026-01-08 2101 -3');
+  assert.deepEqual(Array.from(parsed.bars, bar => bar.date), ['2026-01-05']);
+  assert.equal(parsed.skippedCount, 3);
+}
+
+// A ticker pasted twice occupies one shortlist row (the later row wins).
+{
+  const parsed = api.parsePastedScreenerText('NABIL 90 80 80 1 1 1 91\nADBL 90 80 80 1 1 1 95\nNABIL 90 80 85 1 1 1 99');
+  assert.deepEqual(Array.from(parsed.results, c => [c.ticker, c.rs]), [['NABIL', 99], ['ADBL', 95]]);
+}
+
+// Typed quantities and prices are parsed strictly: "1,250" must not be read as 1.
+{
+  assert.equal(api.parseStrictNumber('1250.50'), 1250.5);
+  assert.equal(api.parseStrictNumber(' 42 '), 42);
+  assert.equal(api.parseStrictNumber(15), 15);
+  for (const bad of ['1,250', '12abc', '1e3', '', '  ', '-5', null, undefined]) {
+    assert.ok(Number.isNaN(api.parseStrictNumber(bad)), `expected ${JSON.stringify(bad)} to be rejected`);
+  }
+}
+
+// The export file is stamped with the local trading date, not the UTC date.
+{
+  const exportApi = loadApp({ fixedDate: '2026-08-25T02:00:00+05:45' });
+  const local = new Date('2026-08-25T02:00:00+05:45');
+  const expected = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+  assert.equal(exportApi.exportFileName(), `nepse-efficient-trader-${expected}.json`);
+}
+
+// Blocked or full browser storage must not stop the desk from loading or
+// from applying an in-memory change.
+{
+  const blockedApi = loadApp({ brokenStorage: true });
+  assert.doesNotThrow(() => blockedApi.loadState());
+  assert.doesNotThrow(() => blockedApi.saveState());
+}
+
+Promise.all([weekendOrderCheck, pendingOrderRepriceCheck, dialogKeyboardCheck])
   .then(() => console.log('Regression checks passed.'))
   .catch(error => {
     console.error(error);
